@@ -205,3 +205,27 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Node / Next dashboard artifacts
+dashboard/node_modules/
+dashboard/.next/
+dashboard/.env.local
+
+# Local dashboard event dump
+dashboard_events.jsonl
+
+# Local runtime logs/dumps
+backend.out.log
+backend.err.log
+backend.live.out.log
+backend.live.err.log
+backend.*.out.log
+backend.*.err.log
+dashboard.out.log
+dashboard.err.log
+dashboard.*.out.log
+dashboard.*.err.log
+collision_log.csv
+
+# Local model weights
+yolo26n.pt

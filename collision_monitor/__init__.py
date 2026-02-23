@@ -1,0 +1,2 @@
+"""Collision monitor package."""
+
