@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_MONITOR_API ?? "http://127.0.0.1:8000";
+const EVENT_PAGE_SIZE = 200;
 
 type RiskLevel = "SAFE" | "WARNING" | "DANGER";
 type RiskFilter = "ALL" | RiskLevel;
@@ -20,6 +21,15 @@ type MonitorEvent = {
   min_distance_m?: number | null;
   ttc_s?: number | null;
   risk_score?: number | null;
+};
+
+type MonitorState = {
+  session_id?: string | null;
+};
+
+type EventsResponse = {
+  events?: MonitorEvent[];
+  total?: number;
 };
 
 function formatNum(value: number | null | undefined, digits = 2) {
@@ -56,18 +66,55 @@ function riskPillClass(risk: RiskLevel | undefined) {
 
 export default function EventLogsPage() {
   const [events, setEvents] = useState<MonitorEvent[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [apiOnline, setApiOnline] = useState(true);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("ALL");
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("latest");
+  const [pageIndex, setPageIndex] = useState(0);
+  const sessionIdRef = useRef<string | null>(null);
 
-  const fetchEvents = async () => {
+  const fetchState = async (): Promise<MonitorState | null> => {
     try {
-      const response = await fetch(`${API_BASE}/api/events?limit=1000`, { cache: "no-store" });
+      const response = await fetch(`${API_BASE}/api/state`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`state status ${response.status}`);
+      const data = (await response.json()) as MonitorState;
+      const nextSessionId = data.session_id ?? null;
+      const prevSessionId = sessionIdRef.current;
+      sessionIdRef.current = nextSessionId;
+      if (prevSessionId !== nextSessionId) {
+        setPageIndex(0);
+      }
+      setApiOnline(true);
+      return data;
+    } catch {
+      setApiOnline(false);
+      return null;
+    }
+  };
+
+  const fetchEvents = async (sessionIdOverride?: string | null, pageOverride?: number) => {
+    try {
+      const sessionId = sessionIdOverride !== undefined ? sessionIdOverride : sessionIdRef.current;
+      const effectivePage = pageOverride !== undefined ? pageOverride : pageIndex;
+      if (!sessionId) {
+        setEvents([]);
+        setTotalCount(0);
+        setLoading(false);
+        return;
+      }
+      const query = new URLSearchParams({
+        limit: String(EVENT_PAGE_SIZE),
+        offset: String(effectivePage * EVENT_PAGE_SIZE),
+        include_total: "true",
+        session_id: sessionId,
+      });
+      const response = await fetch(`${API_BASE}/api/events?${query.toString()}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`events status ${response.status}`);
-      const data = (await response.json()) as { events?: MonitorEvent[] };
+      const data = (await response.json()) as EventsResponse;
       setEvents(data.events ?? []);
+      setTotalCount(typeof data.total === "number" ? data.total : data.events?.length ?? 0);
       setApiOnline(true);
     } catch {
       setApiOnline(false);
@@ -77,10 +124,24 @@ export default function EventLogsPage() {
   };
 
   useEffect(() => {
-    fetchEvents();
-    const timer = window.setInterval(fetchEvents, 2000);
-    return () => window.clearInterval(timer);
+    const loadInitial = async () => {
+      const latestState = await fetchState();
+      await fetchEvents(latestState?.session_id ?? null, 0);
+    };
+    loadInitial();
+    const stateTimer = window.setInterval(fetchState, 1500);
+    const eventTimer = window.setInterval(() => {
+      fetchEvents();
+    }, 2000);
+    return () => {
+      window.clearInterval(stateTimer);
+      window.clearInterval(eventTimer);
+    };
   }, []);
+
+  useEffect(() => {
+    fetchEvents(undefined, pageIndex);
+  }, [pageIndex]);
 
   const warningCount = useMemo(
     () => events.filter((row) => row.risk === "WARNING").length,
@@ -117,6 +178,10 @@ export default function EventLogsPage() {
     return rows;
   }, [events, query, riskFilter, sortKey]);
 
+  const pageCount = Math.max(1, Math.ceil(totalCount / EVENT_PAGE_SIZE));
+  const canPrevPage = pageIndex > 0;
+  const canNextPage = pageIndex + 1 < pageCount;
+
   return (
     <div className="dashboardRoot">
       <aside className="sideNav">
@@ -130,18 +195,18 @@ export default function EventLogsPage() {
             <span className="material-symbols-outlined">dashboard</span>
             <span>Dashboard</span>
           </Link>
-          <button type="button" className="navItem">
-            <span className="material-symbols-outlined">summarize</span>
-            <span>Today&apos;s Summary</span>
-          </button>
           <Link href="/event-logs" className="navItem navItemActive">
             <span className="material-symbols-outlined">list_alt</span>
             <span>Event Logs</span>
           </Link>
-          <button type="button" className="navItem">
+          <Link href="/analytics" className="navItem">
             <span className="material-symbols-outlined">analytics</span>
             <span>Analytics</span>
-          </button>
+          </Link>
+          <Link href="/settings" className="navItem">
+            <span className="material-symbols-outlined">settings</span>
+            <span>Settings</span>
+          </Link>
           <button type="button" className="navItem">
             <span className="material-symbols-outlined">smart_toy</span>
             <span>AI Report</span>
@@ -163,14 +228,14 @@ export default function EventLogsPage() {
           <section className="logsSummaryGrid">
             <article className="logsSummaryCard">
               <span className="logsSummaryLabel">Total Events</span>
-              <strong className="logsSummaryValue">{events.length}</strong>
+              <strong className="logsSummaryValue">{totalCount}</strong>
             </article>
             <article className="logsSummaryCard">
-              <span className="logsSummaryLabel">Warning</span>
+              <span className="logsSummaryLabel">Warning (Page)</span>
               <strong className="logsSummaryValue logsSummaryValueWarn">{warningCount}</strong>
             </article>
             <article className="logsSummaryCard">
-              <span className="logsSummaryLabel">Danger</span>
+              <span className="logsSummaryLabel">Danger (Page)</span>
               <strong className="logsSummaryValue logsSummaryValueDanger">{dangerCount}</strong>
             </article>
           </section>
@@ -211,7 +276,7 @@ export default function EventLogsPage() {
           <article className="eventsTableCard">
             <div className="cardHeader cardHeaderBorder">
               <h3>Event Records</h3>
-              <span className="tinyPill">Showing {filteredRows.length} / {events.length}</span>
+              <span className="tinyPill">Page {pageIndex + 1} / {pageCount}</span>
             </div>
 
             <div className="eventsTableWrap">
@@ -261,6 +326,27 @@ export default function EventLogsPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+            <div className="tablePager">
+              <button
+                type="button"
+                className="pagerButton"
+                disabled={!canPrevPage}
+                onClick={() => setPageIndex((value) => Math.max(0, value - 1))}
+              >
+                Prev
+              </button>
+              <p className="pagerStatus">
+                Showing {filteredRows.length} of {events.length} rows on this page
+              </p>
+              <button
+                type="button"
+                className="pagerButton"
+                disabled={!canNextPage}
+                onClick={() => setPageIndex((value) => value + 1)}
+              >
+                Next
+              </button>
             </div>
           </article>
         </div>
