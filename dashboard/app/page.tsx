@@ -1,15 +1,17 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_MONITOR_API ?? "http://127.0.0.1:8000";
+const DASHBOARD_EVENT_LIMIT = 200;
 
 type RiskLevel = "SAFE" | "WARNING" | "DANGER";
 
 type MonitorEvent = {
   event_id?: string;
   created_at?: string;
+  ts_epoch?: number;
   risk?: RiskLevel;
   obstacle_name?: string | null;
   rep_distance_m?: number | null;
@@ -84,9 +86,11 @@ export default function DashboardPage() {
   const [busy, setBusy] = useState(false);
   const [apiOnline, setApiOnline] = useState(true);
   const [streamError, setStreamError] = useState(false);
+  const [saveNoticeVisible, setSaveNoticeVisible] = useState(false);
+  const saveNoticeTimerRef = useRef<number | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
 
   const latest = state?.latest;
-  const summary = state?.today_summary;
   const streamMeta = state?.stream;
   const recordingEnabled = Boolean(state?.recording_enabled);
 
@@ -107,24 +111,38 @@ export default function DashboardPage() {
       ? (events.reduce((sum, row) => sum + (row.risk_score ?? 0), 0) / events.length) * 100
       : 0,
   );
+  const totalEvents = events.length;
+  const criticalEvents = useMemo(
+    () => events.filter((row) => row.risk === "DANGER").length,
+    [events],
+  );
   const recentEvents = useMemo(() => events.slice(0, 5), [events]);
 
-  const fetchState = async () => {
+  const fetchState = async (): Promise<MonitorState | null> => {
     try {
       const response = await fetch(`${API_BASE}/api/state`, { cache: "no-store" });
       if (!response.ok) throw new Error(`state status ${response.status}`);
       const data = (await response.json()) as MonitorState;
       setState(data);
+      sessionIdRef.current = data.session_id ?? null;
       setApiOnline(true);
       setStreamError(false);
+      return data;
     } catch {
       setApiOnline(false);
+      return null;
     }
   };
 
-  const fetchEvents = async () => {
+  const fetchEvents = async (sessionIdOverride?: string | null) => {
     try {
-      const response = await fetch(`${API_BASE}/api/events?limit=200`, { cache: "no-store" });
+      const sessionId = sessionIdOverride !== undefined ? sessionIdOverride : sessionIdRef.current;
+      if (!sessionId) {
+        setEvents([]);
+        return;
+      }
+      const query = new URLSearchParams({ limit: String(DASHBOARD_EVENT_LIMIT), session_id: sessionId });
+      const response = await fetch(`${API_BASE}/api/events?${query.toString()}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`events status ${response.status}`);
       const data = (await response.json()) as { events: MonitorEvent[] };
       setEvents(data.events ?? []);
@@ -139,7 +157,18 @@ export default function DashboardPage() {
     try {
       const response = await fetch(`${API_BASE}/api/control/${mode}`, { method: "POST" });
       if (!response.ok) throw new Error(`control status ${response.status}`);
-      await Promise.all([fetchState(), fetchEvents()]);
+      const latestState = await fetchState();
+      await fetchEvents(latestState?.session_id ?? null);
+      if (mode === "reset") {
+        if (saveNoticeTimerRef.current !== null) {
+          window.clearTimeout(saveNoticeTimerRef.current);
+        }
+        setSaveNoticeVisible(true);
+        saveNoticeTimerRef.current = window.setTimeout(() => {
+          setSaveNoticeVisible(false);
+          saveNoticeTimerRef.current = null;
+        }, 2600);
+      }
       setApiOnline(true);
     } catch {
       setApiOnline(false);
@@ -149,13 +178,19 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    fetchState();
-    fetchEvents();
+    const loadInitial = async () => {
+      const latestState = await fetchState();
+      await fetchEvents(latestState?.session_id ?? null);
+    };
+    loadInitial();
     const stateTimer = window.setInterval(fetchState, 1000);
     const eventTimer = window.setInterval(fetchEvents, 1500);
     return () => {
       window.clearInterval(stateTimer);
       window.clearInterval(eventTimer);
+      if (saveNoticeTimerRef.current !== null) {
+        window.clearTimeout(saveNoticeTimerRef.current);
+      }
     };
   }, []);
 
@@ -179,18 +214,18 @@ export default function DashboardPage() {
             <span className="material-symbols-outlined">dashboard</span>
             <span>Dashboard</span>
           </Link>
-          <button type="button" className="navItem">
-            <span className="material-symbols-outlined">summarize</span>
-            <span>Today&apos;s Summary</span>
-          </button>
           <Link href="/event-logs" className="navItem">
             <span className="material-symbols-outlined">list_alt</span>
             <span>Event Logs</span>
           </Link>
-          <button type="button" className="navItem">
+          <Link href="/analytics" className="navItem">
             <span className="material-symbols-outlined">analytics</span>
             <span>Analytics</span>
-          </button>
+          </Link>
+          <Link href="/settings" className="navItem">
+            <span className="material-symbols-outlined">settings</span>
+            <span>Settings</span>
+          </Link>
           <button type="button" className="navItem">
             <span className="material-symbols-outlined">smart_toy</span>
             <span>AI Report</span>
@@ -310,17 +345,16 @@ export default function DashboardPage() {
                 <div className="cardHeader">
                   <h3>
                     <span className="material-symbols-outlined">calendar_today</span>
-                    Today&apos;s Overview
+                    Current Session Overview
                   </h3>
-                  <button type="button" className="linkButton">View Full Report</button>
                 </div>
                 <div className="overviewGrid">
                   <div className="overviewStat">
-                    <strong>{summary?.total ?? 0}</strong>
+                    <strong>{totalEvents}</strong>
                     <span>Total Events</span>
                   </div>
                   <div className="overviewStat overviewDanger">
-                    <strong>{summary?.danger_count ?? 0}</strong>
+                    <strong>{criticalEvents}</strong>
                     <span>Critical</span>
                   </div>
                   <div className="overviewStat">
@@ -375,10 +409,16 @@ export default function DashboardPage() {
                   >
                     {recordingEnabled ? "STOP" : "START"}
                   </button>
-                  <button type="button" disabled={busy} className="recordButton reset" onClick={() => callControl("reset")}>
-                    RESET
+                  <button
+                    type="button"
+                    disabled={busy || recordingEnabled}
+                    className="recordButton reset"
+                    onClick={() => callControl("reset")}
+                  >
+                    SAVE
                   </button>
                 </div>
+                <p className="recordHint">START creates a session, STOP pauses it, SAVE closes it and clears the view.</p>
 
                 <article className="recordTimeCard">
                   <div className="recordTimeHeader">
@@ -399,6 +439,16 @@ export default function DashboardPage() {
           {state?.start_error && <p className="bannerError">Camera start error: {state.start_error}</p>}
         </div>
       </main>
+
+      {saveNoticeVisible && (
+        <div className="saveToast" role="status" aria-live="polite">
+          <span className="material-symbols-outlined">check_circle</span>
+          <div className="saveToastText">
+            <strong>Saved</strong>
+            <span>Recording has been saved.</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

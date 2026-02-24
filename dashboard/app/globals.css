@@ -98,6 +98,14 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.navList::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .navItem {
@@ -206,6 +214,14 @@ textarea {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.contentScroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .dashboardGrid {
@@ -547,6 +563,14 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.eventsList::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .emptyState {
@@ -674,6 +698,13 @@ textarea {
   gap: 8px;
 }
 
+.recordHint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .recordButton {
   border: 0;
   border-radius: 10px;
@@ -700,6 +731,13 @@ textarea {
 
 .recordButton.reset {
   background: linear-gradient(135deg, #475569, #64748b);
+}
+
+.recordButton.reset:disabled {
+  opacity: 1;
+  color: #94a3b8;
+  background: linear-gradient(135deg, #1f2937, #334155);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.25);
 }
 
 .recordTimeCard {
@@ -853,6 +891,39 @@ textarea {
   overflow: auto;
 }
 
+.tablePager {
+  border-top: 1px solid var(--line-soft);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pagerButton {
+  border: 1px solid var(--line);
+  background: #0f172a;
+  color: var(--text);
+  border-radius: 8px;
+  height: 34px;
+  min-width: 74px;
+  padding: 0 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pagerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.pagerStatus {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .eventsTable {
   width: 100%;
   border-collapse: collapse;
@@ -924,6 +995,431 @@ textarea {
   font-size: 12px;
 }
 
+.analyticsSync {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.analyticsSessionSection {
+  margin-bottom: 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.3);
+}
+
+.analyticsSessionGrid {
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.analyticsSessionCardWrap {
+  display: grid;
+  gap: 8px;
+}
+
+.analyticsSessionCard {
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--bg-panel-deep);
+  color: var(--text);
+  text-align: left;
+  padding: 10px;
+  cursor: pointer;
+  width: 100%;
+}
+
+.analyticsSessionCard:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+.analyticsSessionCard.active {
+  border-color: rgba(56, 189, 248, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.45);
+  background: rgba(14, 165, 233, 0.14);
+}
+
+.analyticsSessionCard:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.analyticsSessionDeleteButton {
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  background: rgba(127, 29, 29, 0.3);
+  color: #fecaca;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.analyticsSessionDeleteButton:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.8);
+  background: rgba(127, 29, 29, 0.5);
+}
+
+.analyticsSessionDeleteButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.analyticsConfirmOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 180;
+  background: rgba(2, 6, 23, 0.68);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.analyticsConfirmDialog {
+  width: min(460px, 100%);
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  background: linear-gradient(165deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.97));
+  box-shadow: 0 20px 48px rgba(2, 6, 23, 0.6);
+  padding: 16px;
+}
+
+.analyticsConfirmTitle {
+  margin: 0;
+  font-size: 18px;
+}
+
+.analyticsConfirmMessage {
+  margin: 10px 0 0;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.analyticsConfirmSession {
+  margin: 10px 0 0;
+  color: #fecaca;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.analyticsConfirmActions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.analyticsConfirmButton {
+  min-width: 92px;
+  height: 34px;
+  border-radius: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.analyticsConfirmCancel {
+  background: #0f172a;
+  color: #cbd5e1;
+  border-color: var(--line);
+}
+
+.analyticsConfirmDelete {
+  background: rgba(127, 29, 29, 0.5);
+  color: #fecaca;
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.analyticsConfirmDelete:hover:not(:disabled) {
+  background: rgba(127, 29, 29, 0.68);
+  border-color: rgba(248, 113, 113, 0.85);
+}
+
+.analyticsConfirmButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.analyticsSessionTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.analyticsSessionStat {
+  margin: 7px 0 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 20px;
+}
+
+.analyticsSessionSub {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.analyticsSessionRange {
+  margin: 8px 0 0;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.analyticsKpiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.analyticsKpiCard {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.3);
+}
+
+.analyticsKpiCardDanger {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: linear-gradient(170deg, rgba(239, 68, 68, 0.18), rgba(30, 41, 59, 0.8));
+}
+
+.analyticsKpiHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.analyticsKpiHead .material-symbols-outlined {
+  color: rgba(148, 163, 184, 0.5);
+}
+
+.analyticsKpiLabel {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.analyticsKpiValue {
+  margin-top: 10px;
+  display: block;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 30px;
+  line-height: 1;
+}
+
+.analyticsKpiHint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.analyticsGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 1fr);
+  gap: 14px;
+}
+
+.analyticsCard {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.3);
+}
+
+.analyticsCardWide {
+  min-height: 270px;
+}
+
+.analyticsCardSpanFull {
+  grid-column: 1 / -1;
+}
+
+.analyticsBucketChart {
+  min-height: 240px;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+  padding: 14px 12px;
+}
+
+.analyticsBucketCol,
+.analyticsDayCol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.analyticsBucketValue {
+  color: #cbd5e1;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.analyticsBucketTrack,
+.analyticsDayTrack {
+  width: 100%;
+  max-width: 32px;
+  height: 150px;
+  background: rgba(148, 163, 184, 0.15);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+}
+
+.analyticsBucketFill,
+.analyticsDayFill {
+  width: 100%;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.95), rgba(14, 116, 144, 0.95));
+  position: relative;
+}
+
+.analyticsBucketDanger,
+.analyticsDayDanger {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(239, 68, 68, 0.95);
+}
+
+.analyticsBucketLabel {
+  color: var(--muted);
+  font-size: 10px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.analyticsList {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.analyticsListRow {
+  background: var(--bg-panel-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.analyticsListTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.analyticsProgress {
+  margin-top: 8px;
+  height: 8px;
+  width: 100%;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.35);
+  overflow: hidden;
+}
+
+.analyticsProgressFill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.analyticsProgressFill.warning {
+  background: linear-gradient(90deg, #f97316, #fb923c);
+}
+
+.analyticsProgressFill.danger {
+  background: linear-gradient(90deg, #ef4444, #f87171);
+}
+
+.analyticsProgressFill.info {
+  background: linear-gradient(90deg, #0ea5e9, #22d3ee);
+}
+
+.analyticsRowMeta {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.analyticsDayChart {
+  min-height: 220px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+  padding: 14px 12px;
+}
+
+.analyticsEmpty {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.saveToast {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100% - 24px));
+  z-index: 130;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(34, 197, 94, 0.38);
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(21, 128, 61, 0.22));
+  color: #dcfce7;
+  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.45);
+  backdrop-filter: blur(6px);
+  animation: toastIn 0.22s ease-out;
+}
+
+.saveToast .material-symbols-outlined {
+  color: #86efac;
+}
+
+.saveToastText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.saveToastText strong {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.saveToastText span {
+  font-size: 13px;
+}
+
 .bannerError {
   margin: 14px 0 0;
   padding: 10px 12px;
@@ -946,6 +1442,17 @@ textarea {
   }
 }
 
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px));
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
 @media (max-width: 1280px) {
   .dashboardGrid {
     grid-template-columns: minmax(0, 1.5fr) minmax(310px, 1fr);
@@ -953,6 +1460,14 @@ textarea {
 
   .metricGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analyticsKpiGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analyticsGrid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1015,6 +1530,14 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .analyticsKpiGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .analyticsSessionGrid {
+    grid-template-columns: 1fr;
+  }
+
   .logsFilterBar {
     grid-template-columns: 1fr;
   }
@@ -1029,6 +1552,32 @@ textarea {
 
   .recordControls {
     grid-template-columns: 1fr;
+  }
+
+  .tablePager {
+    flex-wrap: wrap;
+  }
+
+  .pagerStatus {
+    order: 3;
+    width: 100%;
+  }
+
+  .analyticsSync {
+    font-size: 11px;
+  }
+
+  .analyticsBucketTrack,
+  .analyticsDayTrack {
+    max-width: 24px;
+  }
+
+  .analyticsBucketLabel {
+    font-size: 9px;
+  }
+
+  .saveToast {
+    width: min(420px, calc(100% - 24px));
   }
 
   .feedCard,
