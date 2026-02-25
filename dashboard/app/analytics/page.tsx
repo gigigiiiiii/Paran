@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_MONITOR_API ?? "http://127.0.0.1:8000";
 const SESSION_CARD_LIMIT = 40;
@@ -121,6 +121,8 @@ export default function AnalyticsPage() {
   const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
   const [deletingSessionKey, setDeletingSessionKey] = useState<string | null>(null);
   const [deleteConfirmSessionKey, setDeleteConfirmSessionKey] = useState<string | null>(null);
+  const [deleteSuccessVisible, setDeleteSuccessVisible] = useState(false);
+  const deleteSuccessTimerRef = useRef<number | null>(null);
 
   const fetchAnalytics = async () => {
     try {
@@ -174,13 +176,24 @@ export default function AnalyticsPage() {
   useEffect(() => {
     fetchAnalytics();
     const timer = window.setInterval(fetchAnalytics, 3000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      if (deleteSuccessTimerRef.current !== null) {
+        window.clearTimeout(deleteSuccessTimerRef.current);
+      }
+    };
   }, []);
 
-  const activeRuntimeSessionKey = useMemo(() => {
-    const sid = state?.session_id?.trim();
-    return sid ? sid : null;
-  }, [state?.session_id]);
+  const showDeleteSuccessToast = () => {
+    if (deleteSuccessTimerRef.current !== null) {
+      window.clearTimeout(deleteSuccessTimerRef.current);
+    }
+    setDeleteSuccessVisible(true);
+    deleteSuccessTimerRef.current = window.setTimeout(() => {
+      setDeleteSuccessVisible(false);
+      deleteSuccessTimerRef.current = null;
+    }, 2600);
+  };
 
   useEffect(() => {
     if (sessionSummaries.length === 0) {
@@ -244,6 +257,7 @@ export default function AnalyticsPage() {
         setSessionPage(0);
       }
       await fetchAnalytics();
+      showDeleteSuccessToast();
     } catch (error) {
       const message = error instanceof Error ? error.message : "세션 삭제에 실패했습니다.";
       window.alert(message);
@@ -434,9 +448,6 @@ export default function AnalyticsPage() {
             </div>
             <div className="analyticsSessionGrid">
               {sessionSummaries.length === 0 && <p className="analyticsEmpty">No saved sessions.</p>}
-              {activeRuntimeSessionKey && (
-                <p className="analyticsEmpty">현재 진행 중인 세션은 RESET 이후 레코드 카드에 표시됩니다.</p>
-              )}
               {sessionListTruncated && (
                 <p className="analyticsEmpty">세션 목록은 최신 범위만 스캔했습니다. 오래된 세션은 제외될 수 있습니다.</p>
               )}
@@ -677,6 +688,16 @@ export default function AnalyticsPage() {
                 {deletingSessionKey === deleteConfirmSessionKey ? "Deleting..." : "Delete"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {deleteSuccessVisible && (
+        <div className="saveToast" role="status" aria-live="polite">
+          <span className="material-symbols-outlined">check_circle</span>
+          <div className="saveToastText">
+            <strong>Deleted</strong>
+            <span>Session deleted successfully.</span>
           </div>
         </div>
       )}
