@@ -6,6 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const API_BASE = process.env.NEXT_PUBLIC_MONITOR_API ?? "http://127.0.0.1:8000";
 const DASHBOARD_EVENT_LIMIT = 200;
 
+type ModeInfo = { mode: string; test_videos: string[] };
+
 type RiskLevel = "SAFE" | "WARNING" | "DANGER";
 
 type MonitorEvent = {
@@ -87,6 +89,9 @@ export default function DashboardPage() {
   const [apiOnline, setApiOnline] = useState(true);
   const [streamError, setStreamError] = useState(false);
   const [saveNoticeVisible, setSaveNoticeVisible] = useState(false);
+  const [modeInfo, setModeInfo] = useState<ModeInfo | null>(null);
+  const [showTestMenu, setShowTestMenu] = useState(false);
+  const [modeBusy, setModeBusy] = useState(false);
   const saveNoticeTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef<string | null>(null);
 
@@ -152,6 +157,33 @@ export default function DashboardPage() {
     }
   };
 
+  const fetchMode = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/mode`, { cache: "no-store" });
+      if (!response.ok) return;
+      const data = (await response.json()) as ModeInfo;
+      setModeInfo(data);
+    } catch {}
+  };
+
+  const switchMode = async (type: "live" | "test", file?: string) => {
+    setModeBusy(true);
+    setShowTestMenu(false);
+    try {
+      const url =
+        type === "live"
+          ? `${API_BASE}/api/mode/live`
+          : `${API_BASE}/api/mode/test?file=${encodeURIComponent(file ?? "")}`;
+      await fetch(url, { method: "POST" });
+      await fetchMode();
+      setStreamError(false);
+    } catch {
+      setApiOnline(false);
+    } finally {
+      setModeBusy(false);
+    }
+  };
+
   const callControl = async (mode: "start" | "stop" | "reset") => {
     setBusy(true);
     try {
@@ -181,13 +213,16 @@ export default function DashboardPage() {
     const loadInitial = async () => {
       const latestState = await fetchState();
       await fetchEvents(latestState?.session_id ?? null);
+      await fetchMode();
     };
     loadInitial();
     const stateTimer = window.setInterval(fetchState, 1000);
     const eventTimer = window.setInterval(fetchEvents, 1500);
+    const modeTimer = window.setInterval(fetchMode, 3000);
     return () => {
       window.clearInterval(stateTimer);
       window.clearInterval(eventTimer);
+      window.clearInterval(modeTimer);
       if (saveNoticeTimerRef.current !== null) {
         window.clearTimeout(saveNoticeTimerRef.current);
       }
@@ -240,6 +275,46 @@ export default function DashboardPage() {
             <span className={`systemPill ${apiOnline ? "online" : "offline"}`}>
               <span className={`pulseDot ${apiOnline ? "online" : "offline"}`} /> SYSTEM {apiOnline ? "ONLINE" : "OFFLINE"}
             </span>
+          </div>
+          <div className="topRight">
+            <span className="modePill">{modeInfo?.mode === "live" ? "🔴 LIVE" : `🎬 TEST: ${modeInfo?.mode?.replace("test:", "") ?? ""}`}</span>
+            <button
+              type="button"
+              disabled={modeBusy || modeInfo?.mode === "live"}
+              className="modeBtn modeBtnLive"
+              onClick={() => switchMode("live")}
+            >
+              LIVE
+            </button>
+            <div className="testMenuWrap">
+              <button
+                type="button"
+                disabled={modeBusy}
+                className="modeBtn modeBtnTest"
+                onClick={() => setShowTestMenu((v) => !v)}
+              >
+                TEST <span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: "middle" }}>expand_more</span>
+              </button>
+              {showTestMenu && (
+                <div className="testDropdown">
+                  {(modeInfo?.test_videos ?? []).length === 0 ? (
+                    <span className="testDropdownEmpty">test_videos/ 폴더가 비어있습니다</span>
+                  ) : (
+                    (modeInfo?.test_videos ?? []).map((file) => (
+                      <button
+                        key={file}
+                        type="button"
+                        className="testDropdownItem"
+                        onClick={() => switchMode("test", file)}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: 16 }}>play_circle</span>
+                        {file}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </header>
 

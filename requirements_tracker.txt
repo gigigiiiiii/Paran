@@ -1,0 +1,15 @@
+# track_demo.py 실행에 필요한 패키지
+# pip install -r requirements_tracker.txt
+
+# YOLO + ByteTrack (Ultralytics 내장)
+ultralytics>=8.0.0
+
+# 영상 처리
+opencv-python>=4.8.0
+
+# 수치 연산
+numpy>=1.24.0
+
+# (선택) GPU 사용 시 CUDA 지원 PyTorch
+# torch>=2.0.0
+# torchvision>=0.15.0
