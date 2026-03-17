@@ -56,6 +56,7 @@ _load_env_file(Path(__file__).resolve().with_name(".env"))
 
 from collision_monitor.config import parse_args
 from collision_monitor.runner import PipelineRunner
+from collision_monitor.video_runner import VideoRunner
 
 
 class MonitorService:
@@ -65,6 +66,7 @@ class MonitorService:
         self._thread: threading.Thread | None = None
         self._start_error: str | None = None
         self._args = None
+        self._current_mode: str = "live"
 
         self._latest_frame_jpeg: bytes | None = None
         self._latest_result: dict[str, Any] = {}
@@ -163,6 +165,20 @@ class MonitorService:
         args.no_overlay = no_overlay in {"1", "true", "yes", "on"}
         hide_hud_panel = os.getenv("MONITOR_HIDE_HUD_PANEL", "1").strip().lower()
         args.hide_hud_panel = hide_hud_panel in {"1", "true", "yes", "on"}
+
+        # ByteTrack 활성화 — 기본값 True (env로 끌 수 있음)
+        # MONITOR_USE_YOLO_TRACK=0 으로 끄면 spatial matching 방식으로 전환
+        use_track = os.getenv("MONITOR_USE_YOLO_TRACK", "1").strip().lower()
+        args.use_yolo_track = use_track not in {"0", "false", "no", "off"}
+
+        # ByteTrack 설정 파일 경로 (기본: 프로젝트 루트의 bytetrack_config.yaml)
+        _default_tracker = str(Path(__file__).resolve().parent.parent / "bytetrack_config.yaml")
+        args.tracker = os.getenv("MONITOR_TRACKER", _default_tracker)
+
+        # 궤적 길이 (기본 30프레임)
+        if os.getenv("MONITOR_TRAIL_LEN"):
+            args.trail_len = int(os.getenv("MONITOR_TRAIL_LEN"))
+
         return args
 
     def start(self):
@@ -170,14 +186,36 @@ class MonitorService:
 
         args = self._build_args()
         self._args = args
+
+        # MONITOR_SOURCE가 설정되어 있으면 VideoRunner (영상 파일/웹캠) 사용
+        # 없으면 기존 PipelineRunner (RealSense 카메라) 사용
+        video_source = os.getenv("MONITOR_SOURCE", "").strip()
+        with self._lock:
+            self._current_mode = f"test:{Path(video_source).name}" if video_source else "live"
         try:
-            self._runner = PipelineRunner(args, display=False, on_result=self._on_runner_result)
+            if video_source:
+                print(f"[INFO] VideoRunner 모드: {video_source}")
+                args.video_source = video_source
+                args.video_loop   = True
+                self._runner = VideoRunner(args, display=False, on_result=self._on_runner_result)
+            else:
+                self._runner = PipelineRunner(args, display=False, on_result=self._on_runner_result)
         except Exception as exc:
             self._start_error = str(exc)
             return
 
-        self._thread = threading.Thread(target=self._runner.run, daemon=True, name="collision-monitor-runner")
+        self._thread = threading.Thread(target=self._run_runner, daemon=True, name="collision-monitor-runner")
         self._thread.start()
+
+    def _run_runner(self):
+        """runner.run()을 감싸서 예외 발생 시 start_error에 기록한다."""
+        try:
+            self._runner.run()
+        except Exception as exc:
+            err_msg = f"runner crashed: {exc}"
+            print(f"[ERROR] {err_msg}")
+            with self._lock:
+                self._start_error = err_msg
 
     def stop(self):
         runner = self._runner
@@ -189,6 +227,65 @@ class MonitorService:
         if runner is not None:
             runner.close()
         self._stop_persist_worker()
+
+    def get_mode(self):
+        test_videos_dir = Path(__file__).resolve().parent.parent / "test_videos"
+        videos: list[str] = []
+        if test_videos_dir.exists():
+            for pat in ("*.mp4", "*.avi", "*.mov", "*.mkv", "*.MP4", "*.AVI"):
+                for f in test_videos_dir.glob(pat):
+                    if f.name not in videos:
+                        videos.append(f.name)
+        videos.sort()
+        with self._lock:
+            mode = self._current_mode
+        return {"mode": mode, "test_videos": videos}
+
+    def switch_source(self, source: str | None = None):
+        """source=None → RealSense PipelineRunner, source='fullpath' → VideoRunner"""
+        # Stop existing runner
+        with self._lock:
+            runner = self._runner
+            thread = self._thread
+        if runner is not None:
+            runner.request_stop()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)
+        if runner is not None:
+            runner.close()
+
+        # Reset runner state
+        with self._lock:
+            self._runner = None
+            self._thread = None
+            self._start_error = None
+            self._latest_frame_jpeg = None
+
+        args = self._build_args()
+        self._args = args
+        source_name = Path(source).name if source else None
+        with self._lock:
+            self._current_mode = f"test:{source_name}" if source_name else "live"
+
+        try:
+            if source:
+                print(f"[INFO] VideoRunner 전환: {source}")
+                args.video_source = source
+                args.video_loop = True
+                self._runner = VideoRunner(args, display=False, on_result=self._on_runner_result)
+            else:
+                print("[INFO] PipelineRunner(RealSense) 전환")
+                self._runner = PipelineRunner(args, display=False, on_result=self._on_runner_result)
+        except Exception as exc:
+            with self._lock:
+                self._start_error = str(exc)
+            return {"ok": False, "error": str(exc)}
+
+        self._thread = threading.Thread(target=self._run_runner, daemon=True, name="collision-monitor-runner")
+        self._thread.start()
+        with self._lock:
+            mode = self._current_mode
+        return {"ok": True, "mode": mode}
 
     def start_recording(self):
         now_ts = time.time()
@@ -968,6 +1065,25 @@ def stop_recording():
 @app.post("/api/control/reset")
 def reset_recording():
     return service.reset_recording()
+
+
+@app.get("/api/mode")
+def get_mode():
+    return service.get_mode()
+
+
+@app.post("/api/mode/live")
+def switch_to_live():
+    return service.switch_source(None)
+
+
+@app.post("/api/mode/test")
+def switch_to_test(file: str = Query(..., description="test_videos 폴더 내 파일명")):
+    test_videos_dir = Path(__file__).resolve().parent.parent / "test_videos"
+    full_path = test_videos_dir / file
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail=f"파일을 찾을 수 없습니다: {file}")
+    return service.switch_source(str(full_path))
 
 
 @app.get("/api/stream")
