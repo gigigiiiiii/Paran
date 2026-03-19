@@ -17,7 +17,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from .byte_tracker import TrackHistory
-from .config import FIXED_CLASSES_DEFAULT, OBSTACLE_CLASSES_DEFAULT, PERSON_CLASS_NAME
+from .config import FIXED_CLASSES_DEFAULT, OBSTACLE_CLASSES_DEFAULT, PERSON_CLASS_NAME, PERSON_CLASS_ALIASES
 from .output import draw_distance_graph, maybe_beep, maybe_open_log
 from .risk import (
     closing_speed_los,
@@ -98,7 +98,7 @@ class FrameProcessor:
         # ── 트래킹 상태 ───────────────────────────────────────────────────────
         trail_len = int(getattr(args, "trail_len", 30))
         self.track_history = TrackHistory(
-            trail_maxlen=trail_len, dead_track_ttl=30, bbox_alpha=0.7
+            trail_maxlen=trail_len, dead_track_ttl=30, bbox_alpha=0.5
         )
         self.prev_person_points    : dict = {}
         self.prev_obstacle_points  : dict = {}
@@ -223,6 +223,9 @@ class FrameProcessor:
             name   = (self.class_names.get(cls_id, str(cls_id))
                       if isinstance(self.class_names, dict)
                       else str(self.class_names[cls_id]))
+            # VisDrone 클래스명 통일 (pedestrian/people → person)
+            if name in PERSON_CLASS_ALIASES:
+                name = PERSON_CLASS_NAME
             x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].cpu().numpy()]
             box_w = max(0, x2 - x1)
             box_h = max(0, y2 - y1)
@@ -266,7 +269,7 @@ class FrameProcessor:
 
                 point_3d = pixel_to_3d(u, v, z, intrinsics)
 
-                is_person   = (name == PERSON_CLASS_NAME)
+                is_person   = (name in PERSON_CLASS_ALIASES)
                 is_obstacle = args.all_non_person or (name in self.obstacle_classes)
                 if is_obstacle:
                     if area_ratio < args.min_obstacle_area_ratio:
@@ -294,8 +297,11 @@ class FrameProcessor:
             else:
                 # depth 없음: 픽셀 좌표를 point_3d 대신 사용 (assign_tracks 호환)
                 point_3d = np.array([float(u), float(v), 0.0], dtype=np.float32)
-                is_person   = (name == PERSON_CLASS_NAME)
+                is_person   = (name in PERSON_CLASS_ALIASES)
                 is_obstacle = args.all_non_person or (name in self.obstacle_classes)
+                # depth 없을 때도 면적 비율로 너무 작은 장애물 제거
+                if is_obstacle and area_ratio < args.min_obstacle_area_ratio:
+                    continue
 
             if box.id is not None:
                 track_id = int(box.id[0].item())
@@ -505,7 +511,6 @@ class FrameProcessor:
             person_color = (50, 220, 50)
             for p in people:
                 x1, y1, x2, y2 = p["bbox"]
-                cx, cy = p["rep_uv"]
                 tid    = p.get("track_id")
                 id_tag = f" #{tid}" if tid is not None else ""
                 if has_depth and p["z"] is not None:
@@ -517,19 +522,9 @@ class FrameProcessor:
                 cv2.putText(canvas, label,
                             (x1, max(20, y1 - 8)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, person_color, 2)
-                cv2.circle(canvas, (cx, cy), 4, person_color, -1)
-
-                trail = p.get("trail", [])
-                if len(trail) >= 2:
-                    pts = np.array(trail, dtype=np.int32)
-                    n   = len(pts)
-                    for i in range(1, n):
-                        cv2.line(canvas, tuple(pts[i-1]), tuple(pts[i]),
-                                 person_color, max(1, int(3 * i / n)))
 
             for o in obstacles:
                 x1, y1, x2, y2 = o["bbox"]
-                cx, cy = o["rep_uv"]
                 tid    = o.get("track_id")
                 box_color  = (180, 120, 60) if o.get("is_fixed") else (220, 120, 60)
                 fixed_tag  = " [fixed]" if o.get("is_fixed") else ""
@@ -543,15 +538,6 @@ class FrameProcessor:
                 cv2.putText(canvas, label,
                             (x1, max(20, y1 - 8)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1)
-                cv2.circle(canvas, (cx, cy), 4, box_color, -1)
-
-                trail = o.get("trail", [])
-                if len(trail) >= 2:
-                    pts = np.array(trail, dtype=np.int32)
-                    n   = len(pts)
-                    for i in range(1, n):
-                        cv2.line(canvas, tuple(pts[i-1]), tuple(pts[i]),
-                                 box_color, max(1, int(3 * i / n)))
 
             # 최근접 쌍 연결선
             if nearest_pair is not None:
@@ -561,8 +547,6 @@ class FrameProcessor:
                 pc = person.get("rep_uv") or ((px1+px2)//2, int(py2*0.9))
                 oc = obs.get("rep_uv")    or ((ox1+ox2)//2, int(oy2*0.9))
                 cv2.line(canvas, pc, oc, color, 3)
-                cv2.circle(canvas, pc, 4, (80, 255, 80),  -1)
-                cv2.circle(canvas, oc, 4, (80, 180, 255), -1)
 
         # 정보 패널 (depth 있을 때만)
         if draw_info_panel:

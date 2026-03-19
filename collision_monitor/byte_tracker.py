@@ -90,7 +90,7 @@ class TrackHistory:
         self,
         trail_maxlen   : int   = 30,
         dead_track_ttl : int   = 30,
-        bbox_alpha     : float = 0.7,
+        bbox_alpha     : float = 0.5,
     ) -> None:
         """
         Parameters
@@ -161,7 +161,7 @@ class TrackHistory:
         # 스무딩된 bbox에서 center 재계산 (trail도 스무딩 좌표 기준)
         # center는 발바닥 기준: x=bbox 중앙, y=bbox 하단
         sx1, sy1, sx2, sy2 = smoothed
-        smooth_center: Center = (int((sx1 + sx2) / 2), int(sy2))
+        smooth_center: Center = (int((sx1 + sx2) / 2), int((sy1 + sy2) / 2))
         smooth_bbox: BBox = (int(sx1), int(sy1), int(sx2), int(sy2))
 
         # 궤적에 스무딩된 중심점 추가
