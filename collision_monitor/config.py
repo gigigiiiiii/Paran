@@ -2,10 +2,12 @@ import argparse
 
 
 PERSON_CLASS_NAME = "person"
+# VisDrone 모델 클래스명 (pedestrian, people → person으로 통합)
+PERSON_CLASS_ALIASES = {"person", "pedestrian", "people"}
 OBSTACLE_CLASSES_DEFAULT = {
     "chair", "couch", "bed", "dining table", "bench", "tv", "refrigerator",
     "oven", "microwave", "sink", "toilet", "car", "motorcycle", "bicycle",
-    "truck", "bus",
+    "truck", "bus", "van", "tricycle", "awning-tricycle", "motor",
 }
 
 FIXED_CLASSES_DEFAULT = {
@@ -18,14 +20,14 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="RealSense + YOLO based collision risk detection and visualization."
     )
-    parser.add_argument("--model", type=str, default="yolo26n.pt", help="YOLO model path")
+    parser.add_argument("--model", type=str, default="yolo26m.pt", help="YOLO model path")
     parser.add_argument("--width", type=int, default=640, help="Camera width")
     parser.add_argument("--height", type=int, default=480, help="Camera height")
     parser.add_argument("--fps", type=int, default=30, help="Camera FPS")
     parser.add_argument("--rs-timeout-ms", type=int, default=10000, help="RealSense wait_for_frames timeout in ms")
     parser.add_argument("--rs-warmup", type=int, default=15, help="Number of initial frames to skip for sensor warmup")
 
-    parser.add_argument("--conf", type=float, default=0.25, help="YOLO confidence threshold")
+    parser.add_argument("--conf", type=float, default=0.35, help="YOLO confidence threshold")
     parser.add_argument("--imgsz", type=int, default=1280, help="YOLO inference image size")
     parser.add_argument("--warn-dist", type=float, default=1.5, help="Warning distance in meters")
     parser.add_argument("--danger-dist", type=float, default=0.9, help="Danger distance in meters")
@@ -54,7 +56,7 @@ def parse_args(argv=None):
 
     parser.add_argument("--log-file", type=str, default="collision_log.csv", help="CSV log output path. Empty disables.")
     parser.add_argument("--use-yolo-track", action="store_true", help="Use YOLO built-in tracker (ByteTrack) for IDs.")
-    parser.add_argument("--tracker", type=str, default="bytetrack.yaml", help="Tracker config (e.g., bytetrack.yaml).")
+    parser.add_argument("--tracker", type=str, default="bytetrack_config.yaml", help="Tracker config (e.g., bytetrack_config.yaml).")
     parser.add_argument("--trail-len", type=int, default=30, help="Trail (중심점 궤적) 유지 최대 프레임 수")
 
     parser.add_argument("--vel-alpha", type=float, default=0.8, help="EMA alpha for velocity smoothing (0~1)")
