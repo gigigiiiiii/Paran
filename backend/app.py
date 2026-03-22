@@ -542,6 +542,8 @@ class MonitorService:
             "offset": str(offset),
         }
         if session_id:
+            if not re.match(r"^session-\d+$", session_id):
+                raise ValueError(f"Invalid session_id format: {session_id!r}")
             query_params["session_id"] = f"eq.{session_id}"
         params = urllib.parse.urlencode(query_params)
         url = f"{self._supabase_url}/rest/v1/{table_name}?{params}"
