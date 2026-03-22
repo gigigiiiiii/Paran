@@ -198,6 +198,7 @@ class TrackHistory:
             if self._ttl[tid] <= 0:
                 self._trails.pop(tid, None)
                 self._ttl.pop(tid, None)
+                self._smooth_bboxes.pop(tid, None)
 
     def get_trail(self, track_id: int) -> Trail:
         """특정 track의 궤적 반환 (읽기 전용 복사본)."""
@@ -207,6 +208,7 @@ class TrackHistory:
         """모든 히스토리와 TTL을 초기화한다. 모드 전환 시 호출."""
         self._trails.clear()
         self._ttl.clear()
+        self._smooth_bboxes.clear()
 
     # ── 확장 포인트: 추후 속도/방향 계산 메서드 추가 위치 ───────────────────
     #
