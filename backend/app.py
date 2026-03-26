@@ -155,6 +155,8 @@ class MonitorService:
 
         if os.getenv("MONITOR_MODEL"):
             args.model = os.getenv("MONITOR_MODEL")
+        if os.getenv("MONITOR_PPE_MODEL"):
+            args.ppe_model = os.getenv("MONITOR_PPE_MODEL")
         if os.getenv("MONITOR_WIDTH"):
             args.width = int(os.getenv("MONITOR_WIDTH"))
         if os.getenv("MONITOR_HEIGHT"):
