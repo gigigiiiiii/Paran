@@ -17,7 +17,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from .byte_tracker import TrackHistory
-from .config import FIXED_CLASSES_DEFAULT, OBSTACLE_CLASSES_DEFAULT, PERSON_CLASS_NAME, PERSON_CLASS_ALIASES
+from .config import CLASS_COLORS, FIXED_CLASSES_DEFAULT, OBSTACLE_CLASSES_DEFAULT, PERSON_CLASS_NAME, PERSON_CLASS_ALIASES
 from .output import draw_distance_graph, maybe_beep, maybe_open_log
 from .risk import (
     closing_speed_los,
@@ -94,6 +94,25 @@ class FrameProcessor:
             self._infer_device = "cpu"
             self._use_half     = False
             print("[FrameProcessor] CPU 모드")
+
+        # ── PPE 모델 (선택) ───────────────────────────────────────────────────
+        ppe_model_path = getattr(args, "ppe_model", "")
+        if ppe_model_path:
+            self.ppe_model = YOLO(ppe_model_path)
+            self.ppe_class_names = getattr(self.ppe_model, "names", None) or self.ppe_model.model.names
+            # 위반 클래스 (빨간색으로 표시)
+            self._ppe_violation_prefixes = ("no_",)
+            # 무시할 클래스
+            self._ppe_skip_classes = {"none", "Person", "person"}
+            print(f"[FrameProcessor] PPE 모델 로드: {ppe_model_path} | 클래스: {list(self.ppe_class_names.values())}")
+        else:
+            self.ppe_model = None
+            self.ppe_class_names = {}
+
+        # PPE 프레임 스킵 + 캐시 (person track_id → {class_name: conf})
+        self._ppe_frame_interval = 3
+        self._ppe_frame_count    = 0
+        self._ppe_cache: dict    = {}
 
         # ── 트래킹 상태 ───────────────────────────────────────────────────────
         trail_len = int(getattr(args, "trail_len", 30))
@@ -508,7 +527,6 @@ class FrameProcessor:
         canvas = color_image.copy()
 
         if draw_detection:
-            person_color = (50, 220, 50)
             for p in people:
                 x1, y1, x2, y2 = p["bbox"]
                 tid    = p.get("track_id")
@@ -517,27 +535,25 @@ class FrameProcessor:
                     label = f"person{id_tag}  {p['z']:.2f}m"
                 else:
                     label = f"person{id_tag}  {p['conf']:.0%}"
-
-                cv2.rectangle(canvas, (x1, y1), (x2, y2), person_color, 2)
+                box_color = CLASS_COLORS.get("person", (50, 220, 50))
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
                 cv2.putText(canvas, label,
                             (x1, max(20, y1 - 8)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, person_color, 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
 
             for o in obstacles:
                 x1, y1, x2, y2 = o["bbox"]
                 tid    = o.get("track_id")
-                box_color  = (180, 120, 60) if o.get("is_fixed") else (220, 120, 60)
-                fixed_tag  = " [fixed]" if o.get("is_fixed") else ""
-                id_tag     = f" #{tid}" if tid is not None else ""
+                id_tag = f" #{tid}" if tid is not None else ""
                 if has_depth and o["z"] is not None:
-                    label = f"{o['name']}{id_tag}{fixed_tag}  {o['z']:.2f}m"
+                    label = f"{o['name']}{id_tag}  {o['z']:.2f}m"
                 else:
-                    label = f"{o['name']}{id_tag}{fixed_tag}  {o['conf']:.0%}"
-
+                    label = f"{o['name']}{id_tag}  {o['conf']:.0%}"
+                box_color = CLASS_COLORS.get(o["name"], (220, 120, 60))
                 cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
                 cv2.putText(canvas, label,
                             (x1, max(20, y1 - 8)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
 
             # 최근접 쌍 연결선
             if nearest_pair is not None:
@@ -572,6 +588,92 @@ class FrameProcessor:
             graph_h = panel_h - 16
             draw_distance_graph(full, self.history, w - graph_w - 12, h + 8, graph_w, graph_h)
             canvas = full
+
+        # ── PPE 추론 및 사람별 매핑 ───────────────────────────────────────────
+        if self.ppe_model is not None and draw_detection:
+            try:
+                self._ppe_frame_count += 1
+                run_ppe = (self._ppe_frame_count % self._ppe_frame_interval == 0)
+
+                if run_ppe:
+                    ppe_results = self.ppe_model.predict(
+                        color_image,
+                        conf=args.conf,
+                        imgsz=int(getattr(args, "imgsz", 1280)),
+                        verbose=False,
+                        device=self._infer_device,
+                        half=self._use_half,
+                    )[0]
+
+                    # PPE 항목 수집 (skip 클래스 제외) + bbox 그리기
+                    ppe_items = []
+                    for box in ppe_results.boxes:
+                        cls_id   = int(box.cls[0].item())
+                        ppe_name = (self.ppe_class_names.get(cls_id, str(cls_id))
+                                    if isinstance(self.ppe_class_names, dict)
+                                    else str(self.ppe_class_names[cls_id]))
+                        if ppe_name in self._ppe_skip_classes:
+                            continue
+                        bx1, by1, bx2, by2 = [int(v) for v in box.xyxy[0].cpu().numpy()]
+                        ppe_conf = float(box.conf[0].item())
+                        is_violation = ppe_name.startswith(self._ppe_violation_prefixes)
+                        box_color = CLASS_COLORS.get(
+                            ppe_name,
+                            (60, 60, 220) if is_violation else (60, 200, 60),
+                        )
+                        cv2.rectangle(canvas, (bx1, by1), (bx2, by2), box_color, 2)
+                        cv2.putText(canvas, f"{ppe_name} {ppe_conf:.0%}",
+                                    (bx1, max(16, by1 - 6)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
+                        ppe_items.append({
+                            "name": ppe_name,
+                            "conf": ppe_conf,
+                            "cx": (bx1 + bx2) // 2,
+                            "cy": (by1 + by2) // 2,
+                        })
+
+                    # 사람 bbox 기준 매핑 → 캐시 업데이트
+                    active_ids = {p.get("track_id") for p in people if p.get("track_id") is not None}
+                    for p in people:
+                        tid = p.get("track_id")
+                        if tid is None:
+                            continue
+                        px1, py1, px2, py2 = p["bbox"]
+                        matched: dict[str, float] = {}
+                        for item in ppe_items:
+                            if px1 <= item["cx"] <= px2 and py1 <= item["cy"] <= py2:
+                                matched[item["name"]] = item["conf"]
+                        if matched:
+                            self._ppe_cache[tid] = matched
+                    # 사라진 사람 캐시 제거
+                    for gone in list(self._ppe_cache):
+                        if gone not in active_ids:
+                            del self._ppe_cache[gone]
+
+                # 캐시된 PPE 결과를 사람 bbox 우측에 표시 (매 프레임)
+                for p in people:
+                    tid = p.get("track_id")
+                    if tid is None:
+                        continue
+                    cached = self._ppe_cache.get(tid, {})
+                    if not cached:
+                        continue
+                    px1, py1, px2, py2 = p["bbox"]
+                    y_offset = py1
+                    for name, conf in cached.items():
+                        is_violation = name.startswith(self._ppe_violation_prefixes)
+                        box_color = CLASS_COLORS.get(
+                            name,
+                            (60, 60, 220) if is_violation else (60, 200, 60),
+                        )
+                        mark = "\u2717" if is_violation else "\u2713"
+                        cv2.putText(canvas, f"{mark} {name} {conf:.0%}",
+                                    (px2 + 6, y_offset + 16),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
+                        y_offset += 22
+
+            except Exception as e:
+                print(f"[FrameProcessor][WARN] PPE 추론 실패: {e}")
 
         # ── 로그·비프 ─────────────────────────────────────────────────────────
         self.history.append(min_distance)

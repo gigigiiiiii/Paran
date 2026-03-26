@@ -227,5 +227,10 @@ dashboard.*.out.log
 dashboard.*.err.log
 collision_log.csv
 
-# Local model weights
-yolo26n.pt
+
+# YOLO 학습 결과물
+runs/
+
+# Test videos
+test_videos/
+test_videos/
