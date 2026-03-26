@@ -95,8 +95,13 @@ def min_distance_between_items(person_item, obs_item, distance_percentile=20.0):
     pairs = []
     for p_s in p_samples:
         p_pt = p_s["point_3d"]
+        if p_pt is None:
+            continue
         for o_s in o_samples:
-            dist = float(np.linalg.norm(p_pt - o_s["point_3d"]))
+            o_pt = o_s["point_3d"]
+            if o_pt is None:
+                continue
+            dist = float(np.linalg.norm(p_pt - o_pt))
             pairs.append((dist, p_s, o_s))
 
     if not pairs:

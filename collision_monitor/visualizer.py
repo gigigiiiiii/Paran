@@ -1,0 +1,97 @@
+"""
+collision_monitor/visualizer.py
+================================
+bbox 시각화 및 HUD 패널 그리기 함수.
+FrameProcessor에서 분리된 순수 렌더링 레이어.
+"""
+from __future__ import annotations
+
+import numpy as np
+import cv2
+
+from .config import CLASS_COLORS
+from .output import draw_distance_graph
+
+
+def draw_detections(
+    canvas: np.ndarray,
+    people: list[dict],
+    obstacles: list[dict],
+    nearest_pair,
+    color: tuple,
+    has_depth: bool,
+) -> np.ndarray:
+    """사람·장애물 bbox + 최근접 쌍 연결선을 canvas에 그린다."""
+    for p in people:
+        x1, y1, x2, y2 = p["bbox"]
+        tid    = p.get("track_id")
+        id_tag = f" #{tid}" if tid is not None else ""
+        if has_depth and p["z"] is not None:
+            label = f"person{id_tag}  {p['z']:.2f}m"
+        else:
+            label = f"person{id_tag}  {p['conf']:.0%}"
+        box_color = CLASS_COLORS.get("person", (50, 220, 50))
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
+        cv2.putText(canvas, label,
+                    (x1, max(20, y1 - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
+
+    for o in obstacles:
+        x1, y1, x2, y2 = o["bbox"]
+        tid    = o.get("track_id")
+        id_tag = f" #{tid}" if tid is not None else ""
+        if has_depth and o["z"] is not None:
+            label = f"{o['name']}{id_tag}  {o['z']:.2f}m"
+        else:
+            label = f"{o['name']}{id_tag}  {o['conf']:.0%}"
+        box_color = CLASS_COLORS.get(o["name"], (220, 120, 60))
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
+        cv2.putText(canvas, label,
+                    (x1, max(20, y1 - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
+
+    if nearest_pair is not None:
+        person, obs, _, _, _, _ = nearest_pair
+        px1, py1, px2, py2 = person["bbox"]
+        ox1, oy1, ox2, oy2 = obs["bbox"]
+        pc = person.get("rep_uv") or ((px1 + px2) // 2, int(py2 * 0.9))
+        oc = obs.get("rep_uv")    or ((ox1 + ox2) // 2, int(oy2 * 0.9))
+        cv2.line(canvas, pc, oc, color, 3)
+
+    return canvas
+
+
+def draw_hud_panel(
+    canvas: np.ndarray,
+    level: str,
+    color: tuple,
+    rep_distance,
+    min_distance,
+    ttc,
+    risk_score_smooth: float,
+    risk_score_raw: float,
+    history,
+) -> np.ndarray:
+    """하단 HUD 패널(위험도·거리·TTC·그래프)을 canvas 아래에 붙인다."""
+    panel_h = 174
+    h, w    = canvas.shape[:2]
+    full    = np.zeros((h + panel_h, w, 3), dtype=np.uint8)
+    full[:h] = canvas
+    cv2.putText(full, f"RISK: {level}",
+                (12, h + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+    cv2.putText(full,
+                f"Rep distance: {rep_distance:.2f} m" if rep_distance else "Rep distance: N/A",
+                (12, h + 64), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (230, 230, 230), 2)
+    cv2.putText(full,
+                f"Min distance: {min_distance:.2f} m" if min_distance else "Min distance: N/A",
+                (12, h + 92), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (230, 230, 230), 2)
+    cv2.putText(full,
+                f"TTC: {ttc:.2f} s" if ttc else "TTC: N/A",
+                (12, h + 120), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (230, 230, 230), 2)
+    cv2.putText(full,
+                f"Risk score: {risk_score_smooth:.2f} (raw {risk_score_raw:.2f})",
+                (12, h + 148), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (210, 210, 210), 2)
+    graph_w = min(360, w // 2)
+    graph_h = panel_h - 16
+    draw_distance_graph(full, history, w - graph_w - 12, h + 8, graph_w, graph_h)
+    return full
