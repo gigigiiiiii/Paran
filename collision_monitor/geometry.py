@@ -101,7 +101,9 @@ def min_distance_between_items(person_item, obs_item, distance_percentile=20.0):
             o_pt = o_s["point_3d"]
             if o_pt is None:
                 continue
-            dist = float(np.linalg.norm(p_pt - o_pt))
+            # 수평 거리 (XZ 평면) — Y(높이) 제외
+            # 바닥 기준 실제 접근 거리를 측정, 키 차이로 인한 거리 왜곡 방지
+            dist = float(np.sqrt((p_pt[0] - o_pt[0])**2 + (p_pt[2] - o_pt[2])**2))
             pairs.append((dist, p_s, o_s))
 
     if not pairs:

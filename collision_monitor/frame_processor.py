@@ -124,8 +124,6 @@ class FrameProcessor:
         self._pending_count    = 0
         self.risk_score_raw    = 0.0
         self.risk_score_smooth = 0.0
-        self.lock_pair         = None
-        self.lock_until        = 0
 
         # ── 기타 ─────────────────────────────────────────────────────────────
         self.history      = deque(maxlen=args.history_size)
@@ -169,8 +167,6 @@ class FrameProcessor:
         self.next_obstacle_track_id = 1
         self.vel_ema_person   = {}
         self.vel_ema_obstacle = {}
-        self.lock_pair  = None
-        self.lock_until = 0
 
     def close(self):
         if self.log_file is not None:
@@ -184,6 +180,7 @@ class FrameProcessor:
         depth_image: np.ndarray | None = None,
         intrinsics=None,
         depth_scale: float | None = None,
+        model_depth_image: np.ndarray | None = None,
     ) -> tuple[np.ndarray, dict]:
         """
         한 프레임을 처리하고 (canvas, result_dict) 를 반환한다.
@@ -321,11 +318,25 @@ class FrameProcessor:
             else:
                 track_id = None
 
+            # 비교용 모델 depth (RealSense live 모드에서 depth 모델과 비교)
+            model_z = None
+            if model_depth_image is not None:
+                from .depth import depth_median_bottom_band, median_depth_from_bbox
+                model_z = depth_median_bottom_band(
+                    model_depth_image, (x1, y1, x2, y2), 1.0,
+                    band_ratio=args.depth_bottom_band,
+                )
+                if model_z is None:
+                    model_z = median_depth_from_bbox(
+                        model_depth_image, (x1, y1, x2, y2), 1.0
+                    )
+
             item = {
                 "bbox"             : (x1, y1, x2, y2),
                 "name"             : name,
                 "conf"             : conf,
                 "z"                : z,
+                "model_z"          : model_z,
                 "point_3d"         : point_3d,
                 "rep_uv"           : (u, v),
                 "track_id"         : track_id,
@@ -403,83 +414,84 @@ class FrameProcessor:
                 else:
                     o["velocity"] = self.vel_ema_obstacle.get(tid)
 
-        # ── 거리·TTC·위험도 계산 (depth 있을 때만) ───────────────────────────
+        # ── 거리·TTC·위험도 계산 (모든 사람-장비 쌍) ─────────────────────────
         min_distance  = None
         ttc           = None
         closing_speed = None
         nearest_pair  = None
         rep_distance  = None
+        all_risk_pairs: list[dict] = []
 
         if has_depth and people and obstacles:
             from .geometry import angle_from_forward_vector, min_distance_between_items
 
-            # 잠금 쌍 재확인
-            if self.lock_pair is not None and self.lock_until > 0:
-                lp_id, lo_id = self.lock_pair
-                lp = next((p for p in people   if int(p.get("track_id", -1)) == lp_id), None)
-                lo = next((o for o in obstacles if int(o.get("track_id", -1)) == lo_id), None)
-                if lp is not None and lo is not None:
-                    fwd = lp["velocity"]
+            for person in people:
+                for obs in obstacles:
+                    dist, ps, os_ = min_distance_between_items(
+                        person, obs,
+                        distance_percentile=self.pair_distance_percentile
+                    )
+                    if dist is None:
+                        continue
+                    fwd = person["velocity"]
                     if fwd is None or float(np.linalg.norm(fwd)) < 1e-3:
                         fwd = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-                    ld, lps, los = min_distance_between_items(
-                        lp, lo, distance_percentile=self.pair_distance_percentile
-                    )
-                    if ld is not None:
-                        obs_pt = los["point_3d"] if los else lo["point_3d"]
-                        angle  = angle_from_forward_vector(fwd, lp["point_3d"], obs_pt)
-                        if angle <= args.front_angle:
-                            min_distance = ld
-                            nearest_pair = (lp, lo, angle, fwd, lps, los)
-                            self.lock_until -= 1
-                        else:
-                            self.lock_pair = None; self.lock_until = 0
+                    obs_pt = os_["point_3d"] if os_ else obs["point_3d"]
+                    angle  = angle_from_forward_vector(fwd, person["point_3d"], obs_pt)
+                    if angle > args.front_angle:
+                        continue
+
+                    pp = ps["point_3d"] if ps else person["point_3d"]
+                    op = os_["point_3d"] if os_ else obs["point_3d"]
+                    pf = {"point_3d": pp, "velocity": person["velocity"]}
+                    of = {"point_3d": op, "velocity": obs["velocity"]}
+                    ttc_f = ttc_forward(pf, of)
+                    ttc_l = ttc_los(pf, of)
+                    pair_cs = closing_speed_los(pf, of)
+                    if args.ttc_mode == "forward":
+                        pair_ttc = ttc_f
+                    elif args.ttc_mode == "los":
+                        pair_ttc = ttc_l
                     else:
-                        self.lock_pair = None; self.lock_until = 0
-                else:
-                    self.lock_pair = None; self.lock_until = 0
+                        cands = [x for x in [ttc_f, ttc_l] if x is not None and x > 0]
+                        pair_ttc = min(cands) if cands else None
 
-            if nearest_pair is None:
-                for person in people:
-                    for obs in obstacles:
-                        dist, ps, os_ = min_distance_between_items(
-                            person, obs,
-                            distance_percentile=self.pair_distance_percentile
-                        )
-                        if dist is None:
-                            continue
-                        fwd = person["velocity"]
-                        if fwd is None or float(np.linalg.norm(fwd)) < 1e-3:
-                            fwd = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-                        obs_pt = os_["point_3d"] if os_ else obs["point_3d"]
-                        angle  = angle_from_forward_vector(fwd, person["point_3d"], obs_pt)
-                        if angle > args.front_angle:
-                            continue
-                        if min_distance is None or dist < min_distance:
-                            min_distance = dist
-                            nearest_pair = (person, obs, angle, fwd, ps, os_)
-                if nearest_pair is not None:
-                    self.lock_pair  = (int(nearest_pair[0]["track_id"]),
-                                       int(nearest_pair[1]["track_id"]))
-                    self.lock_until = max(0, int(args.lock_frames))
+                    pair_score, _ = compute_risk_score(
+                        min_distance=dist, ttc=pair_ttc, closing_speed=pair_cs,
+                        warn_dist=args.warn_dist, danger_dist=args.danger_dist,
+                        warn_ttc=args.warn_ttc,   danger_ttc=args.danger_ttc,
+                        dist_weight=self.score_dist_weight,
+                        ttc_weight=self.score_ttc_weight,
+                        close_weight=self.score_close_weight,
+                        close_ref=self.score_close_ref,
+                    )
+                    pair_level = score_to_level(
+                        score=pair_score,
+                        stable_level="SAFE",
+                        warn_on=self.score_warn_on,   danger_on=self.score_danger_on,
+                        warn_off=self.score_warn_off, danger_off=self.score_danger_off,
+                    )
+                    all_risk_pairs.append({
+                        "person": person, "obs": obs,
+                        "dist": dist, "ttc": pair_ttc, "closing_speed": pair_cs,
+                        "score": pair_score, "level": pair_level,
+                        "angle": angle, "fwd": fwd, "ps": ps, "os_": os_,
+                    })
 
-            if nearest_pair is not None:
-                person, obs, _, _, ps, os_ = nearest_pair
-                pp = ps["point_3d"] if ps else person["point_3d"]
-                op = os_["point_3d"] if os_ else obs["point_3d"]
-                pf = {"point_3d": pp, "velocity": person["velocity"]}
-                of = {"point_3d": op, "velocity": obs["velocity"]}
-                ttc_f = ttc_forward(pf, of)
-                ttc_l = ttc_los(pf, of)
-                closing_speed = closing_speed_los(pf, of)
-                if args.ttc_mode == "forward":
-                    ttc = ttc_f
-                elif args.ttc_mode == "los":
-                    ttc = ttc_l
-                else:
-                    cands = [x for x in [ttc_f, ttc_l] if x is not None and x > 0]
-                    ttc   = min(cands) if cands else None
-                rep_distance = float(np.linalg.norm(person["point_3d"] - obs["point_3d"]))
+            # 위험도 높은 순 정렬 → 최상위 쌍을 결과 대표값으로 사용
+            all_risk_pairs.sort(key=lambda x: x["score"], reverse=True)
+            if all_risk_pairs:
+                top = all_risk_pairs[0]
+                min_distance  = top["dist"]
+                ttc           = top["ttc"]
+                closing_speed = top["closing_speed"]
+                rep_distance  = float(np.linalg.norm(
+                    top["person"]["point_3d"] - top["obs"]["point_3d"]
+                ))
+                nearest_pair  = (
+                    top["person"], top["obs"], top["angle"],
+                    top["fwd"], top["ps"], top["os_"],
+                )
 
         # ── Risk score ───────────────────────────────────────────────────────
         if has_depth:
@@ -520,14 +532,31 @@ class FrameProcessor:
         canvas = color_image.copy()
 
         if draw_detection:
-            canvas = draw_detections(canvas, people, obstacles, nearest_pair, color, has_depth)
+            canvas = draw_detections(canvas, people, obstacles, all_risk_pairs, color, has_depth)
 
         if draw_info_panel:
+            # depth 모델 vs RealSense 오차 통계 계산
+            depth_err_stats = None
+            if model_depth_image is not None:
+                errs, rels = [], []
+                for item in people + obstacles:
+                    z_rs  = item.get("z")
+                    z_mod = item.get("model_z")
+                    if z_rs is not None and z_mod is not None and z_rs > 0:
+                        errs.append(abs(z_mod - z_rs))
+                        rels.append((z_mod - z_rs) / z_rs * 100.0)
+                if errs:
+                    depth_err_stats = {
+                        "n":   len(errs),
+                        "mae": float(np.mean(errs)),
+                        "mre": float(np.mean(rels)),
+                    }
             canvas = draw_hud_panel(
                 canvas, level, color,
                 rep_distance, min_distance, ttc,
                 self.risk_score_smooth, self.risk_score_raw,
                 self.history,
+                depth_err_stats=depth_err_stats,
             )
 
         # ── PPE 추론 및 사람별 매핑 ───────────────────────────────────────────

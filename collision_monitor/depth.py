@@ -12,7 +12,9 @@ def _median_depth_in_rect(depth_image, x1, y1, x2, y2, depth_scale, min_valid=30
     patch = depth_image[y1:y2, x1:x2]
     if patch.size == 0:
         return None
-    valid = patch[patch > 0]
+    # uint16(RealSense): 0=무효. float32(metric depth): 0.01m 미만=무효
+    _min_valid_depth = 0.01 / float(depth_scale) if float(depth_scale) > 0 else 1
+    valid = patch[patch > _min_valid_depth]
     if valid.size < min_valid:
         return None
     return float(np.median(valid) * depth_scale)
@@ -29,7 +31,9 @@ def _valid_depth_values_in_rect(depth_image, x1, y1, x2, y2, depth_scale):
     patch = depth_image[y1:y2, x1:x2]
     if patch.size == 0:
         return None
-    valid = patch[patch > 0]
+    # uint16(RealSense): 0=무효. float32(metric depth): 0.01m 미만=무효
+    _min_valid_depth = 0.01 / float(depth_scale) if float(depth_scale) > 0 else 1
+    valid = patch[patch > _min_valid_depth]
     if valid.size == 0:
         return None
     return valid.astype(np.float32) * float(depth_scale)

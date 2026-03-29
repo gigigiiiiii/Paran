@@ -321,7 +321,7 @@ export default function DashboardPage() {
         <div className="contentScroll">
           <div className="dashboardGrid">
             <section className="leftColumn">
-              <article className="feedCard">
+              <article className={`feedCard risk-border-${risk.toLowerCase()}`}>
                 <div className="feedViewport">
                   {streamAvailable ? (
                     <img
@@ -333,18 +333,6 @@ export default function DashboardPage() {
                   ) : (
                     <div className="offlinePanel" role="status" aria-live="polite">
                       <span className="material-symbols-outlined offlinePanelIcon">videocam_off</span>
-                    </div>
-                  )}
-
-                  {streamAvailable && (
-                    <div className="feedTopOverlay">
-                      <div className={`riskBadge ${riskTone(risk)}`}>
-                        <span className="material-symbols-outlined">warning</span>
-                        <div>
-                          <p>Risk Level</p>
-                          <strong>{risk}</strong>
-                        </div>
-                      </div>
                     </div>
                   )}
 

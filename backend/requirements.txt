@@ -1,3 +1,10 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 
+# Depth Anything V2 Metric (모노큘러 depth 추정, RealSense 대체)
+# GPU 사용 시: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+transformers>=4.40.0
+torch>=2.1.0
+torchvision>=0.16.0
+Pillow>=9.0.0
+
