@@ -134,6 +134,10 @@ class MonitorService:
             args.model = os.getenv("MONITOR_MODEL")
         if os.getenv("MONITOR_PPE_MODEL"):
             args.ppe_model = os.getenv("MONITOR_PPE_MODEL")
+        if os.getenv("MONITOR_CONF"):
+            args.conf = float(os.getenv("MONITOR_CONF"))
+        if os.getenv("MONITOR_IMGSZ"):
+            args.imgsz = int(os.getenv("MONITOR_IMGSZ"))
         if os.getenv("MONITOR_WIDTH"):
             args.width = int(os.getenv("MONITOR_WIDTH"))
         if os.getenv("MONITOR_HEIGHT"):
@@ -155,6 +159,16 @@ class MonitorService:
 
         if os.getenv("MONITOR_TRAIL_LEN"):
             args.trail_len = int(os.getenv("MONITOR_TRAIL_LEN"))
+
+        # 모노큘러 depth 모델 (RealSense 없이 depth 추정)
+        if os.getenv("MONITOR_DEPTH_MODEL"):
+            args.depth_model = os.getenv("MONITOR_DEPTH_MODEL").strip()
+        if os.getenv("MONITOR_DEPTH_FOV"):
+            args.depth_fov = float(os.getenv("MONITOR_DEPTH_FOV"))
+        if os.getenv("MONITOR_DEPTH_COMPARE_INTERVAL"):
+            args.depth_compare_interval = float(os.getenv("MONITOR_DEPTH_COMPARE_INTERVAL"))
+        if os.getenv("MONITOR_FRONT_ANGLE"):
+            args.front_angle = float(os.getenv("MONITOR_FRONT_ANGLE"))
 
         return args
 

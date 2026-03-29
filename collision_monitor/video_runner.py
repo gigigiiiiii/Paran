@@ -3,11 +3,15 @@ collision_monitor/video_runner.py
 ==================================
 영상 파일 / 웹캠에서 프레임을 읽어 FrameProcessor에 전달한다.
 탐지·트래킹 로직은 PipelineRunner(RealSense)와 완전히 동일하다.
-depth 없이 실행하므로 거리·TTC·위험도는 계산하지 않는다.
+
+--depth-model 옵션을 지정하면 Metric3D V2 모델로 metric depth를 추정한다.
+depth 추론은 백그라운드 스레드에서 실행되며, 메인 루프는 블로킹 없이
+이전 결과를 재사용한다 (라이브 모드와 동일한 구조).
 """
 
 from __future__ import annotations
 
+import threading
 import time
 
 import cv2
@@ -29,9 +33,65 @@ class VideoRunner:
         self._source = int(source) if str(source).isdigit() else source
         self._loop   = bool(getattr(args, "video_loop", True))
 
-        # ── FrameProcessor (PipelineRunner와 동일한 탐지·트래킹 로직) ─────────
+        # ── Depth 모델 백그라운드 스레드 (라이브 모드와 동일 구조) ────────────
+        self._depth_model       = None
+        self._depth_scale       = None
+        self._pseudo_intrinsics = None
+
+        self._dm_lock           = threading.Lock()
+        self._dm_input_frame    = None   # 메인 → 워커
+        self._dm_latest_result  = None   # 워커 → 메인
+        self._dm_stop           = threading.Event()
+        self._dm_thread         = None
+        self._dm_last_submit_ts = 0.0
+        self._dm_interval_sec   = float(getattr(args, "depth_compare_interval", 2.0))
+
+        depth_model_id = getattr(args, "depth_model", "none")
+        if depth_model_id and depth_model_id.lower() != "none":
+            from .depth_model import DepthAnythingV2Wrapper, make_intrinsics_from_fov
+            self._depth_fov = float(getattr(args, "depth_fov", 79.0))
+            self._depth_model = DepthAnythingV2Wrapper(
+                model_id=depth_model_id, hfov_deg=self._depth_fov
+            )
+            self._depth_scale     = 1.0
+            self._make_intrinsics = make_intrinsics_from_fov
+
+            self._dm_thread = threading.Thread(
+                target=self._depth_worker, daemon=True, name="video-depth-worker"
+            )
+            self._dm_thread.start()
+            print(
+                f"[VideoRunner] Depth 모델 활성화 (백그라운드, "
+                f"간격={self._dm_interval_sec}s): {depth_model_id}"
+            )
+        else:
+            print("[VideoRunner] Depth 모델 없음 — 탐지+트래킹만 수행")
+
+        # ── FrameProcessor ───────────────────────────────────────────────────
         print(f"[VideoRunner] 모델 로딩: {args.model}")
         self.processor = FrameProcessor(args)
+
+    # ── Depth 백그라운드 워커 (runner.py와 동일) ──────────────────────────────
+
+    def _depth_worker(self):
+        while not self._dm_stop.is_set():
+            with self._dm_lock:
+                frame = self._dm_input_frame
+                self._dm_input_frame = None
+
+            if frame is None:
+                time.sleep(0.01)
+                continue
+
+            try:
+                result = self._depth_model.infer(frame)
+                with self._dm_lock:
+                    self._dm_latest_result = result
+            except Exception as exc:
+                print(f"[VideoDepthWorker] 추론 오류: {exc}")
+
+            # 추론 후 대기 → GPU를 YOLO에 양보
+            self._dm_stop.wait(timeout=self._dm_interval_sec)
 
     # ── 공개 인터페이스 ───────────────────────────────────────────────────────
 
@@ -48,6 +108,9 @@ class VideoRunner:
         if self._closed:
             return
         self._closed = True
+        self._dm_stop.set()
+        if self._dm_thread is not None:
+            self._dm_thread.join(timeout=2.0)
         self.processor.close()
         cv2.destroyAllWindows()
 
@@ -70,10 +133,35 @@ class VideoRunner:
                 if not ret:
                     break
 
-                # depth=None → 거리/TTC/위험도 없이 탐지+트래킹만 수행
+                depth_image = None
+                intrinsics  = None
+                depth_scale = None
+
+                if self._depth_model is not None:
+                    # 첫 프레임에서 intrinsics 초기화
+                    if self._pseudo_intrinsics is None:
+                        h, w = frame.shape[:2]
+                        self._pseudo_intrinsics = self._make_intrinsics(
+                            w, h, self._depth_fov
+                        )
+                        print(f"[VideoRunner] Intrinsics: {self._pseudo_intrinsics}")
+
+                    now_ts = time.time()
+                    with self._dm_lock:
+                        # _dm_interval_sec마다 한 번만 새 프레임 제출
+                        if now_ts - self._dm_last_submit_ts >= self._dm_interval_sec:
+                            self._dm_input_frame    = frame.copy()
+                            self._dm_last_submit_ts = now_ts
+                        depth_image = self._dm_latest_result
+
+                    intrinsics  = self._pseudo_intrinsics
+                    depth_scale = self._depth_scale
+
                 canvas, result = self.processor.process(
                     color_image=frame,
-                    depth_image=None,
+                    depth_image=depth_image,
+                    intrinsics=intrinsics,
+                    depth_scale=depth_scale,
                 )
 
                 if self.on_result is not None:

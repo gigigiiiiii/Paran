@@ -130,4 +130,30 @@ def parse_args(argv=None):
         help="TTC calculation mode: forward / los / both_min",
     )
 
+    # ── 모노큘러 Depth 모델 (RealSense 없이 depth 추정) ─────────────────────
+    parser.add_argument(
+        "--depth-compare-interval",
+        type=float,
+        default=2.0,
+        dest="depth_compare_interval",
+        help="라이브 모드에서 depth 비교 추론 간격(초). GPU 경쟁 방지. 기본 2.0초.",
+    )
+    parser.add_argument(
+        "--depth-model",
+        type=str,
+        default="none",
+        dest="depth_model",
+        help=(
+            "모노큘러 metric depth 모델 ID. 'none'이면 비활성화. "
+            "예: depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
+        ),
+    )
+    parser.add_argument(
+        "--depth-fov",
+        type=float,
+        default=79.0,
+        dest="depth_fov",
+        help="영상 수평 화각(°). depth_model 사용 시 intrinsics 계산에 사용. 기본값 79.0(RealSense D435 기준)",
+    )
+
     return parser.parse_args(argv)
