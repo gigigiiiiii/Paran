@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-
+    
 # Support direct script execution (e.g. "Run Code" on backend/app.py).
 if __package__ in {None, ""}:
     project_root = Path(__file__).resolve().parents[1]

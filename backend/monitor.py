@@ -169,6 +169,8 @@ class MonitorService:
             args.depth_compare_interval = float(os.getenv("MONITOR_DEPTH_COMPARE_INTERVAL"))
         if os.getenv("MONITOR_FRONT_ANGLE"):
             args.front_angle = float(os.getenv("MONITOR_FRONT_ANGLE"))
+        if os.getenv("MONITOR_TTC_MODE"):
+            args.ttc_mode = os.getenv("MONITOR_TTC_MODE").strip()
 
         return args
 

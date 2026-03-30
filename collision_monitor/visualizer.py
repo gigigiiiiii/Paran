@@ -32,10 +32,7 @@ def draw_detections(
         x1, y1, x2, y2 = p["bbox"]
         tid    = p.get("track_id")
         id_tag = f" #{tid}" if tid is not None else ""
-        if has_depth and p["z"] is not None:
-            label = f"person{id_tag}  {p['z']:.2f}m"
-        else:
-            label = f"person{id_tag}  {p['conf']:.0%}"
+        label = f"person{id_tag}  {p['conf']:.0%}"
         box_color = CLASS_COLORS.get("person", (50, 220, 50))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
         cv2.putText(canvas, label,
@@ -56,10 +53,7 @@ def draw_detections(
         x1, y1, x2, y2 = o["bbox"]
         tid    = o.get("track_id")
         id_tag = f" #{tid}" if tid is not None else ""
-        if has_depth and o["z"] is not None:
-            label = f"{o['name']}{id_tag}  {o['z']:.2f}m"
-        else:
-            label = f"{o['name']}{id_tag}  {o['conf']:.0%}"
+        label = f"{o['name']}{id_tag}  {o['conf']:.0%}"
         box_color = CLASS_COLORS.get(o["name"], (220, 120, 60))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
         cv2.putText(canvas, label,
@@ -82,7 +76,7 @@ def draw_detections(
         px1, py1, px2, py2 = person["bbox"]
         ox1, oy1, ox2, oy2 = obs["bbox"]
         pc = person.get("rep_uv") or ((px1 + px2) // 2, int(py2 * 0.9))
-        oc = obs.get("rep_uv")    or ((ox1 + ox2) // 2, int(oy2 * 0.9))
+        oc = obs.get("rep_uv")   or ((ox1 + ox2) // 2, int(oy2 * 0.9))
         line_color = _PAIR_COLORS.get(pair["level"], color)
         thickness  = 4 if pair["level"] == "DANGER" else 2
         cv2.line(canvas, pc, oc, line_color, thickness)

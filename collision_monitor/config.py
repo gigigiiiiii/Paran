@@ -82,7 +82,7 @@ def parse_args(argv=None):
 
     parser.add_argument("--log-file", type=str, default="collision_log.csv", help="CSV log output path. Empty disables.")
     parser.add_argument("--use-yolo-track", action="store_true", help="Use YOLO built-in tracker (ByteTrack) for IDs.")
-    parser.add_argument("--tracker", type=str, default="bytetrack_config.yaml", help="Tracker config (e.g., bytetrack_config.yaml).")
+    parser.add_argument("--tracker", type=str, default="botsort_reid_config.yaml", help="Tracker config (e.g., botsort_reid_config.yaml).")
     parser.add_argument("--trail-len", type=int, default=30, help="Trail (중심점 궤적) 유지 최대 프레임 수")
 
     parser.add_argument("--vel-alpha", type=float, default=0.8, help="EMA alpha for velocity smoothing (0~1)")
@@ -100,6 +100,8 @@ def parse_args(argv=None):
                         help="Reject collision samples if depth differs from object base depth by more than this (m)")
     parser.add_argument("--pair-distance-percentile", type=float, default=20.0,
                         help="Robust percentile (1~50) for person-obstacle sample distance")
+    parser.add_argument("--proximity-gate", type=float, default=4.0, dest="proximity_gate",
+                        help="센터-투-센터 3D 거리가 이 값(m) 초과인 쌍은 거리 계산·연결선 생략. 0=비활성")
     parser.add_argument("--risk-up-frames", type=int, default=2,
                         help="Consecutive frames required to raise risk level")
     parser.add_argument("--risk-down-frames", type=int, default=4,

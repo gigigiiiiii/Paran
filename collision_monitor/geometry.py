@@ -88,9 +88,20 @@ def build_collision_samples(
     return samples
 
 
-def min_distance_between_items(person_item, obs_item, distance_percentile=20.0):
+def min_distance_between_items(person_item, obs_item, distance_percentile=20.0, near_z_margin=2.0):
     p_samples = person_item.get("collision_samples") or [{"uv": None, "point_3d": person_item["point_3d"]}]
     o_samples = obs_item.get("collision_samples") or [{"uv": None, "point_3d": obs_item["point_3d"]}]
+
+    # 사람 z에 가까운 장애물 샘플만 사용 — 대형 장비의 먼 쪽 표면 샘플 제거
+    if near_z_margin > 0 and len(o_samples) > 1:
+        p_z_vals = [s["point_3d"][2] for s in p_samples if s.get("point_3d") is not None]
+        if p_z_vals:
+            person_z = float(np.mean(p_z_vals))
+            filtered = [s for s in o_samples
+                        if s.get("point_3d") is not None
+                        and abs(float(s["point_3d"][2]) - person_z) <= near_z_margin]
+            if filtered:
+                o_samples = filtered
 
     pairs = []
     for p_s in p_samples:
