@@ -124,6 +124,7 @@ class FrameProcessor:
         self._pending_count    = 0
         self.risk_score_raw    = 0.0
         self.risk_score_smooth = 0.0
+        self.lock_pairs        : dict = {}  # {(person_id, obs_id): remaining_lock_frames}
 
         # ── 기타 ─────────────────────────────────────────────────────────────
         self.history      = deque(maxlen=args.history_size)
@@ -167,6 +168,7 @@ class FrameProcessor:
         self.next_obstacle_track_id = 1
         self.vel_ema_person   = {}
         self.vel_ema_obstacle = {}
+        self.lock_pairs.clear()
 
     def close(self):
         if self.log_file is not None:
@@ -192,7 +194,7 @@ class FrameProcessor:
                      and intrinsics is not None
                      and depth_scale is not None)
         now = time.time()
-        dt  = max(1e-3, now - self.prev_time)
+        dt  = min(max(1e-3, now - self.prev_time), 0.5)  # 최대 0.5s: 프레임 드롭 시 속도 추적 폭발 방지
 
         # ── YOLO + ByteTrack ─────────────────────────────────────────────────
         imgsz     = int(getattr(args, "imgsz", 1280))
@@ -414,7 +416,7 @@ class FrameProcessor:
                 else:
                     o["velocity"] = self.vel_ema_obstacle.get(tid)
 
-        # ── 거리·TTC·위험도 계산 (모든 사람-장비 쌍) ─────────────────────────
+        # ── 거리·TTC·위험도 계산 (모든 사람-장비 쌍, 쌍별 lock 적용) ───────────
         min_distance  = None
         ttc           = None
         closing_speed = None
@@ -425,35 +427,54 @@ class FrameProcessor:
         if has_depth and people and obstacles:
             from .geometry import angle_from_forward_vector, min_distance_between_items
 
+            active_keys: set = set()
+
             for person in people:
                 for obs in obstacles:
+                    p_tid = int(person.get("track_id", -1))
+                    o_tid = int(obs.get("track_id", -1))
+                    pair_key = (p_tid, o_tid)
+                    lock_remaining = self.lock_pairs.get(pair_key, 0)
+
                     dist, ps, os_ = min_distance_between_items(
                         person, obs,
                         distance_percentile=self.pair_distance_percentile
                     )
                     if dist is None:
+                        self.lock_pairs.pop(pair_key, None)
                         continue
+
                     fwd = person["velocity"]
                     if fwd is None or float(np.linalg.norm(fwd)) < 1e-3:
                         fwd = np.array([0.0, 0.0, 1.0], dtype=np.float32)
                     obs_pt = os_["point_3d"] if os_ else obs["point_3d"]
                     angle  = angle_from_forward_vector(fwd, person["point_3d"], obs_pt)
+
                     if angle > args.front_angle:
+                        self.lock_pairs.pop(pair_key, None)
                         continue
 
+                    # 쌍별 lock 갱신
+                    if lock_remaining > 0:
+                        self.lock_pairs[pair_key] = lock_remaining - 1
+                    else:
+                        self.lock_pairs[pair_key] = max(0, int(args.lock_frames))
+                    active_keys.add(pair_key)
+
+                    # TTC / closing_speed / risk_score 계산
                     pp = ps["point_3d"] if ps else person["point_3d"]
                     op = os_["point_3d"] if os_ else obs["point_3d"]
                     pf = {"point_3d": pp, "velocity": person["velocity"]}
                     of = {"point_3d": op, "velocity": obs["velocity"]}
-                    ttc_f = ttc_forward(pf, of)
-                    ttc_l = ttc_los(pf, of)
-                    pair_cs = closing_speed_los(pf, of)
+                    ttc_f    = ttc_forward(pf, of)
+                    ttc_l    = ttc_los(pf, of)
+                    pair_cs  = closing_speed_los(pf, of)
                     if args.ttc_mode == "forward":
                         pair_ttc = ttc_f
                     elif args.ttc_mode == "los":
                         pair_ttc = ttc_l
                     else:
-                        cands = [x for x in [ttc_f, ttc_l] if x is not None and x > 0]
+                        cands    = [x for x in [ttc_f, ttc_l] if x is not None and x > 0]
                         pair_ttc = min(cands) if cands else None
 
                     pair_score, _ = compute_risk_score(
@@ -478,17 +499,24 @@ class FrameProcessor:
                         "angle": angle, "fwd": fwd, "ps": ps, "os_": os_,
                     })
 
-            # 위험도 높은 순 정렬 → 최상위 쌍을 결과 대표값으로 사용
+            # 이번 프레임에 활성화되지 않은 lock 쌍 TTL 감소 및 정리
+            for k in list(self.lock_pairs.keys()):
+                if k not in active_keys:
+                    self.lock_pairs[k] -= 1
+                    if self.lock_pairs[k] <= 0:
+                        del self.lock_pairs[k]
+
+            # 위험도 높은 순 정렬 → 최상위 쌍을 대표값으로 사용
             all_risk_pairs.sort(key=lambda x: x["score"], reverse=True)
             if all_risk_pairs:
-                top = all_risk_pairs[0]
-                min_distance  = top["dist"]
-                ttc           = top["ttc"]
+                top          = all_risk_pairs[0]
+                min_distance = top["dist"]
+                ttc          = top["ttc"]
                 closing_speed = top["closing_speed"]
-                rep_distance  = float(np.linalg.norm(
+                rep_distance = float(np.linalg.norm(
                     top["person"]["point_3d"] - top["obs"]["point_3d"]
                 ))
-                nearest_pair  = (
+                nearest_pair = (
                     top["person"], top["obs"], top["angle"],
                     top["fwd"], top["ps"], top["os_"],
                 )
