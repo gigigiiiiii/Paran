@@ -130,10 +130,13 @@ class MonitorService:
         args         = parse_args([])
         args.log_file = ""
 
+        _project_root = Path(__file__).resolve().parent.parent
         if os.getenv("MONITOR_MODEL"):
-            args.model = os.getenv("MONITOR_MODEL")
+            _m = Path(os.getenv("MONITOR_MODEL"))
+            args.model = str(_m if _m.is_absolute() else _project_root / _m)
         if os.getenv("MONITOR_PPE_MODEL"):
-            args.ppe_model = os.getenv("MONITOR_PPE_MODEL")
+            _p = Path(os.getenv("MONITOR_PPE_MODEL"))
+            args.ppe_model = str(_p if _p.is_absolute() else _project_root / _p)
         if os.getenv("MONITOR_CONF"):
             args.conf = float(os.getenv("MONITOR_CONF"))
         if os.getenv("MONITOR_IMGSZ"):

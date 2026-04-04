@@ -5,39 +5,23 @@ PERSON_CLASS_NAME = "person"
 # VisDrone 모델 클래스명 (pedestrian, people → person으로 통합)
 PERSON_CLASS_ALIASES = {"person", "Person", "pedestrian", "people"}
 
-# yolo26m.pt (COCO) 기준 장애물 클래스
+# best.pt (공장 특화) 기준 장애물 클래스
 OBSTACLE_CLASSES_DEFAULT = {
-    "car", "motorcycle", "bicycle", "truck", "bus",
+    "forklift", "truck", "crane_hook",
 }
 
 FIXED_CLASSES_DEFAULT: set = set()
 
-# 클래스별 바운딩 박스 색상 (BGR)
-# — yolo26m.pt 메인 모델 클래스
-# — best.pt PPE 모델 클래스
+# 클래스별 바운딩 박스 색상 (BGR) — best.pt 기준
 CLASS_COLORS: dict[str, tuple[int, int, int]] = {
     # 사람
-    "person":    (50,  220,  50),   # 초록
-    "Person":    (50,  220,  50),   # 초록 (PPE 모델 출력)
-    # 이동 장비 (yolo26m.pt)
-    "car":        (0,  165, 255),   # 주황
-    "truck":      (0,  100, 255),   # 주황-빨강
-    "bus":        (0,  140, 255),   # 진주황
-    "motorcycle": (200,  50, 200),  # 보라
-    "bicycle":    (200, 200,   0),  # 청록
-    # PPE 착용 (best.pt)
-    "helmet":    (200, 200,  50),   # 청록
-    "vest":      (230, 180,  50),   # 하늘
-    "gloves":    (200, 150, 100),   # 연청
-    "boots":     (150, 200, 100),   # 연초록
-    "goggles":   (220, 200,  80),   # 밝은청록
-    # PPE 미착용 (best.pt)
-    "no_helmet": (50,   50, 220),   # 빨강
-    "no_gloves": (80,   50, 200),   # 진빨강
-    "no_boots":  (100,  50, 200),   # 자주
-    "no_goggle": (120,  50, 200),   # 보라
+    "person":     ( 50, 220,  50),   # 초록
+    # 이동 장비 (best.pt)
+    "forklift":   (  0, 165, 255),   # 주황
+    "truck":      (  0, 100, 255),   # 주황-빨강
+    "crane_hook": (200,  50, 200),   # 보라
     # 기타
-    "none":      (160, 160, 160),   # 회색
+    "none":       (160, 160, 160),   # 회색
 }
 
 
@@ -45,7 +29,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="RealSense + YOLO based collision risk detection and visualization."
     )
-    parser.add_argument("--model", type=str, default="yolo26m.pt", help="YOLO model path")
+    parser.add_argument("--model", type=str, default="best.pt", help="YOLO model path")
     parser.add_argument("--ppe-model", type=str, default="", dest="ppe_model", help="PPE detection model path (optional, runs in parallel)")
     parser.add_argument("--width", type=int, default=640, help="Camera width")
     parser.add_argument("--height", type=int, default=480, help="Camera height")
