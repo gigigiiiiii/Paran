@@ -50,6 +50,13 @@ def parse_args(argv=None):
     parser.add_argument("--fixed-classes", type=str, default="", help="Comma separated fixed obstacle class names")
     parser.add_argument("--all-non-person", action="store_true", help="Treat all non-person classes as obstacles.")
 
+    parser.add_argument("--use-sahi", action="store_true", dest="use_sahi",
+                        help="Use SAHI sliced inference for small object detection")
+    parser.add_argument("--sahi-slice-size", type=int, default=320, dest="sahi_slice_size",
+                        help="Slice size (px) for SAHI inference")
+    parser.add_argument("--sahi-overlap", type=float, default=0.2, dest="sahi_overlap",
+                        help="Overlap ratio between SAHI slices")
+
     parser.add_argument("--min-obstacle-area-ratio", type=float, default=0.01, help="Ignore small obstacle boxes (ratio)")
     parser.add_argument("--min-obstacle-size-m", type=float, default=0.35, help="Ignore obstacles smaller than this (m)")
 

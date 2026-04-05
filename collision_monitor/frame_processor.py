@@ -96,6 +96,27 @@ class FrameProcessor:
             self._use_half     = False
             print("[FrameProcessor] CPU 모드")
 
+
+        # ── SAHI (소형 객체 탐지 강화) ────────────────────────────────────────
+        self._use_sahi = bool(getattr(args, "use_sahi", False))
+        self._sahi_model = None
+        if self._use_sahi:
+            try:
+                from sahi import AutoDetectionModel
+                device_str = f"cuda:{self._infer_device}" if isinstance(self._infer_device, int) else "cpu"
+                self._sahi_model = AutoDetectionModel.from_pretrained(
+                    model_type="ultralytics",
+                    model_path=args.model,
+                    confidence_threshold=args.conf,
+                    device=device_str,
+                )
+                self._sahi_slice_size = int(getattr(args, "sahi_slice_size", 320))
+                self._sahi_overlap    = float(getattr(args, "sahi_overlap", 0.2))
+                print(f"[FrameProcessor] SAHI 활성화 | slice={self._sahi_slice_size} overlap={self._sahi_overlap}")
+            except ImportError:
+                print("[FrameProcessor][WARN] sahi 패키지 없음. pip install sahi 후 재시작 필요.")
+                self._use_sahi = False
+
         # ── PPE 모델 (선택) ───────────────────────────────────────────────────
         from .ppe_processor import PPEProcessor
         ppe_model_path = getattr(args, "ppe_model", "")
@@ -109,7 +130,7 @@ class FrameProcessor:
         # ── 트래킹 상태 ───────────────────────────────────────────────────────
         trail_len = int(getattr(args, "trail_len", 30))
         self.track_history = TrackHistory(
-            trail_maxlen=trail_len, dead_track_ttl=30, bbox_alpha=0.5
+            trail_maxlen=trail_len, dead_track_ttl=45, bbox_alpha=0.7
         )
         self.prev_person_points    : dict = {}
         self.prev_obstacle_points  : dict = {}
@@ -159,6 +180,45 @@ class FrameProcessor:
             self._pending_count = 0
         return self.stable_level
 
+    def _infer_sahi(self, color_image: np.ndarray, conf: float) -> list:
+        """SAHI sliced inference → ultralytics box 호환 래퍼 리스트 반환"""
+        import torch
+        from sahi.predict import get_sliced_prediction
+
+        rgb = color_image[:, :, ::-1]  # BGR → RGB
+        result = get_sliced_prediction(
+            rgb,
+            self._sahi_model,
+            slice_height=self._sahi_slice_size,
+            slice_width=self._sahi_slice_size,
+            overlap_height_ratio=self._sahi_overlap,
+            overlap_width_ratio=self._sahi_overlap,
+            verbose=0,
+        )
+
+        # class name → id 역매핑
+        name_to_id = {v: k for k, v in self.class_names.items()}
+
+        boxes = []
+        for pred in result.object_prediction_list:
+            if pred.score.value < conf:
+                continue
+            cls_name = pred.category.name
+            cls_id   = name_to_id.get(cls_name, pred.category.id)
+            x1, y1, x2, y2 = pred.bbox.to_xyxy()
+
+            class _Box:
+                pass
+
+            b = _Box()
+            b.cls  = torch.tensor([cls_id], dtype=torch.float32)
+            b.conf = torch.tensor([pred.score.value], dtype=torch.float32)
+            b.xyxy = torch.tensor([[x1, y1, x2, y2]], dtype=torch.float32)
+            b.id   = None  # SAHI는 tracking ID 없음 → assign_tracks로 대체
+            boxes.append(b)
+
+        return boxes
+
     def reset_tracking(self):
         """영상 루프 재시작 등 트래킹 상태를 초기화할 때 호출."""
         self.track_history.reset()
@@ -196,15 +256,20 @@ class FrameProcessor:
         now = time.time()
         dt  = min(max(1e-3, now - self.prev_time), 0.5)  # 최대 0.5s: 프레임 드롭 시 속도 추적 폭발 방지
 
-        # ── YOLO + ByteTrack ─────────────────────────────────────────────────
+        # ── YOLO + ByteTrack (또는 SAHI) ─────────────────────────────────────
         imgsz     = int(getattr(args, "imgsz", 1280))
         use_track = getattr(args, "use_yolo_track", True)
-        if use_track:
+
+        if self._use_sahi and self._sahi_model is not None:
+            raw_boxes = self._infer_sahi(color_image, args.conf)
+        elif use_track:
             try:
-                results = self.model.track(
+                _r = self.model.track(
                     color_image,
                     conf=args.conf,
                     imgsz=imgsz,
+                    iou=0.45,
+                    agnostic_nms=True,
                     tracker=args.tracker,
                     persist=True,
                     verbose=False,
@@ -213,15 +278,17 @@ class FrameProcessor:
                 )[0]
             except Exception as e:
                 print(f"[FrameProcessor][WARN] track() 실패, predict() fallback: {e}")
-                results = self.model.predict(
-                    color_image, conf=args.conf, imgsz=imgsz, verbose=False,
+                _r = self.model.predict(
+                    color_image, conf=args.conf, imgsz=imgsz, iou=0.45, verbose=False,
                     device=self._infer_device, half=self._use_half,
                 )[0]
+            raw_boxes = _r.boxes
         else:
-            results = self.model.predict(
-                color_image, conf=args.conf, imgsz=imgsz, verbose=False,
+            _r = self.model.predict(
+                color_image, conf=args.conf, imgsz=imgsz, iou=0.45, verbose=False,
                 device=self._infer_device, half=self._use_half,
             )[0]
+            raw_boxes = _r.boxes
 
         # ── 탐지 결과 파싱 → people / obstacles 분리 ────────────────────────
         frame_h, frame_w = color_image.shape[:2]
@@ -229,7 +296,7 @@ class FrameProcessor:
         people    : list[dict] = []
         obstacles : list[dict] = []
 
-        for box in results.boxes:
+        for box in raw_boxes:
             cls_id = int(box.cls[0].item())
             conf   = float(box.conf[0].item())
             name   = (self.class_names.get(cls_id, str(cls_id))

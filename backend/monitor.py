@@ -175,6 +175,16 @@ class MonitorService:
         if os.getenv("MONITOR_TTC_MODE"):
             args.ttc_mode = os.getenv("MONITOR_TTC_MODE").strip()
 
+        use_tta = os.getenv("MONITOR_USE_TTA", "0").strip().lower()
+        args.use_tta = use_tta in {"1", "true", "yes", "on"}
+
+        use_sahi = os.getenv("MONITOR_USE_SAHI", "0").strip().lower()
+        args.use_sahi = use_sahi in {"1", "true", "yes", "on"}
+        if os.getenv("MONITOR_SAHI_SLICE_SIZE"):
+            args.sahi_slice_size = int(os.getenv("MONITOR_SAHI_SLICE_SIZE"))
+        if os.getenv("MONITOR_SAHI_OVERLAP"):
+            args.sahi_overlap = float(os.getenv("MONITOR_SAHI_OVERLAP"))
+
         return args
 
     # ── 러너 생명주기 ─────────────────────────────────────────────────────────
