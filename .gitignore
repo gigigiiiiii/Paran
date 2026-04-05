@@ -231,6 +231,9 @@ collision_log.csv
 # YOLO 학습 결과물
 runs/
 
+# 모델 가중치 파일 (대용량, git 제외)
+*.pt
+
 # Test videos
 test_videos/
 test_videos/
