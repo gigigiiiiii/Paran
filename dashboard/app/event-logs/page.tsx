@@ -207,10 +207,10 @@ export default function EventLogsPage() {
             <span className="material-symbols-outlined">settings</span>
             <span>Settings</span>
           </Link>
-          <button type="button" className="navItem">
+          <Link href="/reports" className="navItem">
             <span className="material-symbols-outlined">smart_toy</span>
             <span>AI Report</span>
-          </button>
+          </Link>
         </nav>
       </aside>
 

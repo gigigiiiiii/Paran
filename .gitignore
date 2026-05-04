@@ -227,6 +227,9 @@ dashboard.*.out.log
 dashboard.*.err.log
 collision_log.csv
 
+# Local report LLM key
+backend/reports/api_key
+
 
 # YOLO 학습 결과물
 runs/

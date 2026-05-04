@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
     
 # Support direct script execution (e.g. "Run Code" on backend/app.py).
 if __package__ in {None, ""}:
@@ -41,19 +42,36 @@ _load_env_file(Path(__file__).resolve().with_name(".env"))
 
 try:
     from .monitor import MonitorService  # 패키지로 임포트 시
+    from .reports import DailyReportScheduler, DashboardReportGenerator
 except ImportError:
     from monitor import MonitorService   # uvicorn app:app 직접 실행 시
+    from reports import DailyReportScheduler, DashboardReportGenerator
 
 
 service = MonitorService()
+report_output_dir = Path(os.getenv("REPORT_OUTPUT_DIR") or str(Path(__file__).resolve().parents[1] / "out_reports"))
+report_generator = DashboardReportGenerator(
+    event_source=service.events,
+    output_dir=str(report_output_dir),
+    supabase_url=os.getenv("SUPABASE_URL"),
+    snapshot_bucket=os.getenv("SUPABASE_SNAPSHOT_BUCKET", "collision-event-snaps").strip(),
+)
+report_scheduler = DailyReportScheduler(
+    report_generator,
+    run_at=os.getenv("REPORT_DAILY_RUN_AT", "23:59"),
+    output_format=os.getenv("REPORT_OUTPUT_FORMAT", "pdf"),
+)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     service.start()
+    if os.getenv("REPORT_SCHEDULER_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        report_scheduler.start()
     try:
         yield
     finally:
+        report_scheduler.stop()
         service.stop()
 
 
@@ -149,6 +167,86 @@ def reset_recording():
 @app.get("/api/mode")
 def get_mode():
     return service.get_mode()
+
+
+def _parse_report_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD") from exc
+
+
+@app.get("/api/reports/daily")
+def generate_daily_report(
+    date_: str | None = Query(default=None, alias="date"),
+    session_id: str | None = Query(default=None),
+    format: str = Query(default="pdf", pattern="^pdf$"),
+    download: bool = Query(default=False),
+):
+    normalized_session_id = session_id.strip() if session_id else None
+    if normalized_session_id == "":
+        normalized_session_id = None
+    result = report_generator.generate(
+        target_date=_parse_report_date(date_),
+        session_id=normalized_session_id,
+        output_format=format,
+    )
+    if download:
+        return FileResponse(result["path"], filename=Path(result["path"]).name)
+    return {
+        "ok": result["ok"],
+        "path": result["path"],
+        "format": result["format"],
+        "output": result["output"],
+        "download_url": f"/api/reports/files/{Path(result['path']).name}",
+        "report_date": result["report_date"],
+        "chain1": {
+            "risk_summary": result["chain1"]["risk_summary"],
+            "validated_count": len(result["chain1"]["validated_events"]),
+        },
+        "chain2": result["chain2"],
+        "chain3": {
+            "summary": result["chain3"].get("summary"),
+            "improvements": result["chain3"].get("improvements"),
+        },
+    }
+
+
+@app.get("/api/reports/scheduler")
+def get_report_scheduler_state():
+    return report_scheduler.state()
+
+
+@app.get("/api/reports/files/{filename}")
+def download_report_file(filename: str):
+    safe_name = Path(filename).name
+    if safe_name != filename or not safe_name.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="invalid report filename")
+    full_path = (report_output_dir / safe_name).resolve()
+    if not str(full_path).startswith(str(report_output_dir.resolve())):
+        raise HTTPException(status_code=403, detail="invalid report path")
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="report file not found")
+    return FileResponse(str(full_path), filename=safe_name, media_type="application/pdf")
+
+
+@app.post("/api/reports/scheduler/run")
+def run_report_scheduler_once(date_: str | None = Query(default=None, alias="date")):
+    result = report_scheduler.run_once(_parse_report_date(date_))
+    return {
+        "ok": result["ok"],
+        "path": result["path"],
+        "format": result["format"],
+        "output": result["output"],
+        "report_date": result["report_date"],
+        "chain2": result["chain2"],
+        "chain3": {
+            "summary": result["chain3"].get("summary"),
+            "improvements": result["chain3"].get("improvements"),
+        },
+    }
 
 
 @app.post("/api/mode/live")
