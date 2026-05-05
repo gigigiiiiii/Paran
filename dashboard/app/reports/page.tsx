@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_MONITOR_API ?? "http://127.0.0.1:8000";
 
@@ -33,23 +33,67 @@ type ReportResponse = {
   };
 };
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+type SessionSummaryApi = {
+  session_id?: string | null;
+  total?: number;
+  warning?: number;
+  danger?: number;
+  avg_risk_pct?: number;
+  start_ts_ms?: number;
+  end_ts_ms?: number;
+};
+
+type SessionsResponse = {
+  sessions?: SessionSummaryApi[];
+};
+
+function formatSessionLabel(session: SessionSummaryApi): string {
+  const sid = session.session_id ?? "";
+  const total = session.total ?? 0;
+  if (session.start_ts_ms && session.start_ts_ms > 0) {
+    const dt = new Date(session.start_ts_ms).toLocaleString("ko-KR", { hour12: false });
+    return `${sid} (${dt}, ${total}건)`;
+  }
+  return `${sid} (${total}건)`;
 }
 
-function buildReportQuery(date: string, mode: "all" | "date") {
+function buildReportQuery(sessionId: string) {
   const query = new URLSearchParams({ format: "pdf" });
-  if (mode === "date" && date) query.set("date", date);
+  if (sessionId) query.set("session_id", sessionId);
   return query.toString();
 }
 
 export default function ReportsPage() {
-  const [mode, setMode] = useState<"all" | "date">("all");
-  const [date, setDate] = useState(todayIso());
+  const [sessionId, setSessionId] = useState<string>("");
+  const [sessions, setSessions] = useState<SessionSummaryApi[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [apiOnline, setApiOnline] = useState(true);
   const [report, setReport] = useState<ReportResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const fetchSessions = async () => {
+    setSessionsLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/sessions?limit=40&scan_limit=5000`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`sessions status ${response.status}`);
+      const data = (await response.json()) as SessionsResponse;
+      setSessions(
+        (data.sessions ?? [])
+          .filter((s): s is SessionSummaryApi & { session_id: string } => Boolean(s.session_id?.trim()))
+          .sort((a, b) => (b.end_ts_ms ?? 0) - (a.end_ts_ms ?? 0)),
+      );
+      setApiOnline(true);
+    } catch {
+      setApiOnline(false);
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSessions();
+  }, []);
 
   const downloadUrl = useMemo(() => {
     if (!report?.download_url) return null;
@@ -60,7 +104,7 @@ export default function ReportsPage() {
     setLoading(true);
     setError(null);
     try {
-      const query = buildReportQuery(date, mode);
+      const query = buildReportQuery(sessionId);
       const response = await fetch(`${API_BASE}/api/reports/daily?${query}`, { cache: "no-store" });
       if (!response.ok) {
         let detail = `report status ${response.status}`;
@@ -135,21 +179,20 @@ export default function ReportsPage() {
               </div>
               <div className="reportControls">
                 <label className="logsField">
-                  <span>Range</span>
-                  <select className="logsInput" value={mode} onChange={(event) => setMode(event.target.value as "all" | "date")}>
-                    <option value="all">All saved events</option>
-                    <option value="date">Selected date</option>
-                  </select>
-                </label>
-                <label className="logsField">
-                  <span>Date</span>
-                  <input
+                  <span>Session</span>
+                  <select
                     className="logsInput"
-                    type="date"
-                    value={date}
-                    disabled={mode === "all"}
-                    onChange={(event) => setDate(event.target.value)}
-                  />
+                    value={sessionId}
+                    onChange={(event) => setSessionId(event.target.value)}
+                    disabled={sessionsLoading}
+                  >
+                    <option value="">전체 세션</option>
+                    {sessions.map((s) => (
+                      <option key={s.session_id} value={s.session_id ?? ""}>
+                        {formatSessionLabel(s)}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <button type="button" className="reportPrimaryButton" disabled={loading} onClick={generateReport}>
                   <span className="material-symbols-outlined">{loading ? "hourglass_top" : "auto_awesome"}</span>

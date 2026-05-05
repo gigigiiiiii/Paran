@@ -5,21 +5,24 @@ PERSON_CLASS_NAME = "person"
 # VisDrone 모델 클래스명 (pedestrian, people → person으로 통합)
 PERSON_CLASS_ALIASES = {"person", "Person", "pedestrian", "people"}
 
-# best.pt (공장 특화) 기준 장애물 클래스
+# yolo26m.pt (COCO 80클래스) 기준 장애물 클래스
 OBSTACLE_CLASSES_DEFAULT = {
-    "forklift", "truck", "crane_hook",
+    "car", "motorcycle", "bicycle", "bus", "truck", "train",
 }
 
 FIXED_CLASSES_DEFAULT: set = set()
 
-# 클래스별 바운딩 박스 색상 (BGR) — best.pt 기준
+# 클래스별 바운딩 박스 색상 (BGR) — yolo26m.pt (COCO) 기준
 CLASS_COLORS: dict[str, tuple[int, int, int]] = {
     # 사람
     "person":     ( 50, 220,  50),   # 초록
-    # 이동 장비 (best.pt)
-    "forklift":   (  0, 165, 255),   # 주황
+    # 이동 장비 (COCO)
+    "car":        (  0, 165, 255),   # 주황
     "truck":      (  0, 100, 255),   # 주황-빨강
-    "crane_hook": (200,  50, 200),   # 보라
+    "bus":        (  0,  60, 255),   # 빨강
+    "motorcycle": ( 50, 200, 255),   # 노랑-주황
+    "bicycle":    (255, 200,  50),   # 하늘-노랑
+    "train":      (200,  50, 200),   # 보라
     # 기타
     "none":       (160, 160, 160),   # 회색
 }
@@ -29,7 +32,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="RealSense + YOLO based collision risk detection and visualization."
     )
-    parser.add_argument("--model", type=str, default="best.pt", help="YOLO model path")
+    parser.add_argument("--model", type=str, default="yolo26m.pt", help="YOLO model path")
     parser.add_argument("--ppe-model", type=str, default="", dest="ppe_model", help="PPE detection model path (optional, runs in parallel)")
     parser.add_argument("--width", type=int, default=640, help="Camera width")
     parser.add_argument("--height", type=int, default=480, help="Camera height")

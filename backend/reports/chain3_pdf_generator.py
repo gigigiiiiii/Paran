@@ -38,17 +38,49 @@ def _case_row(event: dict[str, Any]) -> list[str]:
     ]
 
 
-def _table_style(font_size: int = 8):
+def _table_style(font_size: int = 8, font_name: str = "Helvetica"):
     from reportlab.lib import colors
     from reportlab.platypus import TableStyle
 
     return TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-        ("FONT_SIZE", (0, 0), (-1, -1), font_size),
+        ("FONTNAME", (0, 0), (-1, -1), font_name),
+        ("FONTSIZE", (0, 0), (-1, -1), font_size),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.whitesmoke]),
     ])
+
+
+_KOREAN_FONT_CANDIDATES = [
+    r"C:\Windows\Fonts\malgun.ttf",
+    r"C:\Windows\Fonts\gulim.ttc",
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+]
+_KOREAN_FONT_NAME = "KoreanFont"
+
+
+def _register_korean_font() -> bool:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    for candidate in _KOREAN_FONT_CANDIDATES:
+        if Path(candidate).exists():
+            try:
+                pdfmetrics.registerFont(TTFont(_KOREAN_FONT_NAME, candidate))
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def _apply_korean_font(styles: Any, font_available: bool) -> None:
+    if not font_available:
+        return
+    for style_name in ("Title", "Heading2", "BodyText", "Normal"):
+        if style_name in styles:
+            styles[style_name].fontName = _KOREAN_FONT_NAME
 
 
 def write_daily_report_pdf(
@@ -64,13 +96,16 @@ def write_daily_report_pdf(
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"daily_report_{report_date.isoformat()}.pdf"
 
+    font_available = _register_korean_font()
     styles = getSampleStyleSheet()
+    _apply_korean_font(styles, font_available)
+
     doc = SimpleDocTemplate(str(path), pagesize=A4, rightMargin=32, leftMargin=32, topMargin=32, bottomMargin=32)
-    title = str(chain2_output.get("title") or "Daily Collision Report")
+    title = str(chain2_output.get("title") or "일일 충돌 위험 보고서")
     story = [
         Paragraph(f"{html.escape(title)} - {report_date.isoformat()}", styles["Title"]),
         Spacer(1, 12),
-        Paragraph("1. Summary", styles["Heading2"]),
+        Paragraph("1. 요약", styles["Heading2"]),
         Paragraph(html.escape(str(chain2_output.get("summary") or "-")), styles["BodyText"]),
         Spacer(1, 12),
     ]
@@ -87,7 +122,7 @@ def write_daily_report_pdf(
     ], repeatRows=1)
     risk_table.setStyle(_table_style())
     story.extend([
-        Paragraph("2. Risk Distribution", styles["Heading2"]),
+        Paragraph("2. 위험 등급 분포", styles["Heading2"]),
         risk_table,
         Spacer(1, 12),
     ])
@@ -102,21 +137,21 @@ def write_daily_report_pdf(
     case_table = Table(case_rows, repeatRows=1)
     case_table.setStyle(_table_style(font_size=7))
     story.extend([
-        Paragraph("3. Key Cases", styles["Heading2"]),
+        Paragraph("3. 핵심 케이스", styles["Heading2"]),
         case_table,
         Spacer(1, 12),
     ])
 
     snapshot_flowables = _snapshot_flowables(chain2_output.get("key_cases") or [], styles, Image)
-    story.append(Paragraph("4. Evidence Snapshots", styles["Heading2"]))
+    story.append(Paragraph("4. 증거 스냅샷", styles["Heading2"]))
     if snapshot_flowables:
         story.extend(snapshot_flowables)
     else:
-        story.append(Paragraph("No accessible snapshot images were available for the selected key cases.", styles["BodyText"]))
+        story.append(Paragraph("선택된 핵심 케이스에 대한 스냅샷 이미지를 불러올 수 없습니다.", styles["BodyText"]))
     story.append(Spacer(1, 12))
 
     risk_patterns = chain2_output.get("risk_patterns") or []
-    story.append(Paragraph("5. Risk Patterns", styles["Heading2"]))
+    story.append(Paragraph("5. 위험 패턴", styles["Heading2"]))
     if risk_patterns:
         for item in risk_patterns:
             story.append(Paragraph(f"- {html.escape(str(item))}", styles["BodyText"]))
@@ -125,7 +160,7 @@ def write_daily_report_pdf(
     story.append(Spacer(1, 12))
 
     improvements = chain2_output.get("improvements") or []
-    story.append(Paragraph("6. Improvements", styles["Heading2"]))
+    story.append(Paragraph("6. 개선 조치", styles["Heading2"]))
     if improvements:
         for item in improvements:
             story.append(Paragraph(f"- {html.escape(str(item))}", styles["BodyText"]))
@@ -195,6 +230,8 @@ class DashboardReportGenerator:
                 offset=offset,
                 include_total=True,
             )
+            if isinstance(payload, dict) and payload.get("error"):
+                raise RuntimeError(f"Supabase 이벤트 조회 실패: {payload['error']}")
             batch = payload.get("events", []) if isinstance(payload, dict) else payload
             if not isinstance(batch, list) or not batch:
                 break

@@ -101,7 +101,6 @@ app.add_middleware(
 def health():
     return {"ok": True, "service": "collision-monitor", "start_error": service.state()["start_error"]}
 
-
 @app.get("/api/state")
 def get_state():
     return service.state()
@@ -188,11 +187,16 @@ def generate_daily_report(
     normalized_session_id = session_id.strip() if session_id else None
     if normalized_session_id == "":
         normalized_session_id = None
-    result = report_generator.generate(
-        target_date=_parse_report_date(date_),
-        session_id=normalized_session_id,
-        output_format=format,
-    )
+    try:
+        result = report_generator.generate(
+            target_date=_parse_report_date(date_),
+            session_id=normalized_session_id,
+            output_format=format,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"보고서 생성 실패: {exc}") from exc
     if download:
         return FileResponse(result["path"], filename=Path(result["path"]).name)
     return {

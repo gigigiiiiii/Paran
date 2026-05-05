@@ -19,6 +19,7 @@ _PAIR_COLORS = {
     "DANGER":  (0,    0,  220),
 }
 
+
 def draw_detections(
     canvas: np.ndarray,
     people: list[dict],

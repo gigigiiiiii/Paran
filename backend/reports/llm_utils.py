@@ -43,7 +43,7 @@ def run_llm_json_chain(
     output_model: type[BaseModel] | None = None,
     max_retries: int = 2,
 ) -> dict[str, Any]:
-    from langchain.prompts import PromptTemplate
+    from langchain_core.prompts import PromptTemplate
 
     llm = get_reports_llm()
     last_error: Exception | None = None

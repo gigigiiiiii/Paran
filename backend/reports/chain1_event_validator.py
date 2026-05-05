@@ -68,14 +68,15 @@ def classify_risk_level(event: dict[str, Any]) -> str:
 
 def judgement_reason(event: dict[str, Any], level: str) -> str:
     risk = str(event.get("risk") or "UNKNOWN").upper()
-    parts = [f"dashboard risk={risk}", f"risk score={risk_percent(event)}%"]
+    parts = [f"대시보드 위험도={risk}", f"위험 점수={risk_percent(event)}%"]
     distance = _num(event.get("rep_distance_m"))
     ttc = _num(event.get("ttc_s"))
     if distance is not None:
-        parts.append(f"distance={distance:.2f}m")
+        parts.append(f"거리={distance:.2f}m")
     if ttc is not None:
-        parts.append(f"ttc={ttc:.2f}s")
-    return f"{level} classification based on " + ", ".join(parts)
+        parts.append(f"TTC={ttc:.2f}s")
+    level_ko = {"High": "높음", "Medium": "중간", "Low": "낮음"}.get(level, level)
+    return f"{level_ko} 등급 판정 근거: " + ", ".join(parts)
 
 
 def risk_factors(event: dict[str, Any], level: str, repeated_count: int = 1) -> dict[str, str]:
@@ -86,16 +87,16 @@ def risk_factors(event: dict[str, Any], level: str, repeated_count: int = 1) -> 
     dashboard_risk = str(event.get("risk") or "UNKNOWN").upper()
     return {
         "distance_factor": (
-            f"Representative distance is {distance:.2f}m."
-            if distance is not None else "Representative distance is not available."
+            f"대표 거리 {distance:.2f}m로 판정에 영향."
+            if distance is not None else "대표 거리 정보 없음."
         ),
-        "ttc_factor": f"TTC is {ttc:.2f}s." if ttc is not None else "TTC is not available.",
-        "obstacle_factor": f"Related obstacle type is {obstacle}.",
+        "ttc_factor": f"TTC {ttc:.2f}s로 판정에 영향." if ttc is not None else "TTC 정보 없음.",
+        "obstacle_factor": f"관련 장애물 유형: {obstacle}.",
         "repetition_factor": (
-            f"Similar obstacle context appears {repeated_count} times."
-            if repeated_count > 1 else "No repeated context is evident in the selected events."
+            f"동일 장애물 맥락이 {repeated_count}회 반복됨."
+            if repeated_count > 1 else "선택된 이벤트 내 반복 맥락 없음."
         ),
-        "rule_agreement": f"Rule helper={rule_level}, dashboard risk={dashboard_risk}.",
+        "rule_agreement": f"룰 기반 판정={rule_level}, 대시보드 위험도={dashboard_risk}.",
     }
 
 

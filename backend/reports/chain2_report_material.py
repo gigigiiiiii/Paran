@@ -97,16 +97,16 @@ def _build_summary_text(
     top_obstacles: list[tuple[str, int]],
 ) -> str:
     if total == 0:
-        return "No dashboard collision records were found for the selected report range."
+        return "선택한 보고서 범위에서 충돌 이벤트가 발견되지 않았습니다."
 
     high = int(risk_summary.get("high") or 0)
     medium = int(risk_summary.get("medium") or 0)
     low = int(risk_summary.get("low") or 0)
-    obstacle_text = ", ".join(f"{name}({count})" for name, count in top_obstacles) or "unknown"
+    obstacle_text = ", ".join(f"{name}({count}건)" for name, count in top_obstacles) or "없음"
     return (
-        f"Total {total} dashboard collision records were analyzed. "
-        f"Risk distribution is High {high}, Medium {medium}, Low {low}. "
-        f"Main repeated obstacle groups are {obstacle_text}."
+        f"총 {total}건의 충돌 이벤트를 분석했습니다. "
+        f"위험 등급 분포: 높음 {high}건, 중간 {medium}건, 낮음 {low}건. "
+        f"주요 반복 장애물 유형: {obstacle_text}."
     )
 
 
@@ -115,13 +115,13 @@ def _build_improvements(
     top_obstacles: list[tuple[str, int]],
 ) -> list[str]:
     improvements = [
-        "Review the highest-risk key cases first and compare the saved snapshots with the actual work area.",
-        "Adjust the movement path, obstacle placement, or detection zone around repeated collision points.",
+        "위험도 높은 핵심 케이스를 우선 검토하고, 저장된 스냅샷과 실제 작업 구역을 비교하십시오.",
+        "반복 충돌 지점 주변의 이동 경로, 장애물 배치 또는 감지 구역을 조정하십시오.",
     ]
     if int(risk_summary.get("high") or 0) > 0:
-        improvements.append("Treat High cases as immediate safety review items before continuing the same workflow.")
+        improvements.append("높음 등급 케이스는 동일 작업 재개 전 즉각적인 안전 검토 항목으로 처리하십시오.")
     if top_obstacles:
-        improvements.append(f"Install visible warning and separation controls around repeated {top_obstacles[0][0]} interaction zones.")
+        improvements.append(f"{top_obstacles[0][0]} 반복 상호작용 구역에 시각적 경고 표시 및 분리 통제 장치를 설치하십시오.")
     return improvements
 
 
@@ -130,7 +130,7 @@ def _select_key_cases(events: list[dict[str, Any]], limit: int = 10) -> list[dic
     key_cases = []
     for event in ranked[:limit]:
         copied = dict(event)
-        copied["why_key"] = copied.get("judgement_reason") or "Selected by risk level, risk score, distance, TTC, and repeated context."
+        copied["why_key"] = copied.get("judgement_reason") or "위험 등급, 위험 점수, 거리, TTC, 반복 맥락을 기준으로 선정."
         key_cases.append(copied)
     return key_cases
 
@@ -160,9 +160,9 @@ def _build_risk_patterns(
                 if str(event.get("obstacle_name") or "unknown") == obstacle
                 and str(event.get("risk_level")) == "High"
             )
-            patterns.append(f"{obstacle} appears repeatedly across {count} events, including {high_count} High cases.")
+            patterns.append(f"{obstacle}이(가) {count}건에 걸쳐 반복 등장하며, 이 중 높음 등급 {high_count}건 포함.")
     if not patterns and events:
-        patterns.append("No repeated obstacle pattern dominates, but key cases require individual review.")
+        patterns.append("반복 지배 패턴은 없으나, 핵심 케이스 개별 검토가 필요합니다.")
     return patterns
 
 

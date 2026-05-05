@@ -25,6 +25,7 @@ Rules:
 - risk_percent must be consistent with both input risk_score and final risk_level.
 - Do not invent event counts.
 - Keep internal candidate thoughts out of the final JSON. Only leave concise manager-facing evidence.
+- All text fields (judgement_reason, risk_factors) must be written in Korean.
 - Return JSON only.
 """
 
@@ -35,20 +36,20 @@ Input events:
 Rule-based helper output:
 {rule_output_json}
 
-Return exactly this JSON schema:
+Return exactly this JSON schema (all text fields in Korean):
 {{
   "validated_events": [
     {{
       "event_id": "same event_id",
       "risk_level": "High|Medium|Low",
       "risk_percent": 0,
-      "judgement_reason": "concise final reason for a safety manager",
+      "judgement_reason": "안전 관리자를 위한 간결한 최종 판정 근거 (한국어)",
       "risk_factors": {{
-        "distance_factor": "how distance affected judgement",
-        "ttc_factor": "how TTC affected judgement",
-        "obstacle_factor": "how obstacle type affected judgement",
-        "repetition_factor": "how repeated context affected judgement",
-        "rule_agreement": "whether rule_output/dashboard risk agreed or conflicted"
+        "distance_factor": "거리가 판정에 미친 영향 (한국어)",
+        "ttc_factor": "TTC가 판정에 미친 영향 (한국어)",
+        "obstacle_factor": "장애물 유형이 판정에 미친 영향 (한국어)",
+        "repetition_factor": "반복 맥락이 판정에 미친 영향 (한국어)",
+        "rule_agreement": "룰 기반 결과와의 일치 여부 (한국어)"
       }}
     }}
   ],
@@ -73,6 +74,7 @@ Hard constraints:
 - key_cases selection criteria: High first, then higher risk_percent, then shorter TTC/closer distance, then repeated context.
 - risk_patterns must describe accumulated patterns, not isolated single events.
 - improvements must be concrete actions, not abstract advice.
+- All text fields (summary, risk_patterns, improvements, why_key) must be written in Korean.
 - Return JSON only.
 """
 
@@ -83,9 +85,9 @@ Chain 1 output:
 Rule-based helper material:
 {rule_material_json}
 
-Return exactly this JSON schema:
+Return exactly this JSON schema (all text fields in Korean):
 {{
-  "summary": "one concise Korean or English report-ready paragraph",
+  "summary": "보고서용 간결한 한국어 요약 단락",
   "risk_distribution": {{"high": 0, "medium": 0, "low": 0}},
   "total_events": 0,
   "key_cases": [
@@ -99,14 +101,14 @@ Return exactly this JSON schema:
       "ttc_s": 0,
       "snapshot_path": "optional saved snapshot path",
       "snapshot_url": "optional saved snapshot url",
-      "why_key": "why this case was selected"
+      "why_key": "이 케이스가 선정된 이유 (한국어)"
     }}
   ],
   "risk_patterns": [
-    "repeated or accumulated risk pattern involving obstacle/location/situation"
+    "장애물/위치/상황과 관련된 반복 또는 누적 위험 패턴 (한국어)"
   ],
   "improvements": [
-    "concrete action such as installing warning lights in worker-forklift crossing zones"
+    "작업자-지게차 교차 구역 경고등 설치 등 구체적인 조치 (한국어)"
   ],
   "top_obstacles": [{{"name": "obstacle", "count": 0}}]
 }}
@@ -127,6 +129,7 @@ Hard constraints:
 - Use concise, official safety-management report style.
 - Use technical terms only when they help decisions.
 - Include risk_patterns in the final report material.
+- All text fields (title, summary, risk_patterns, improvements, why_key) must be written in Korean.
 - Return JSON only.
 """
 
@@ -134,10 +137,10 @@ CHAIN3_HUMAN_TEMPLATE = """
 Chain 2 output:
 {chain2_json}
 
-Return exactly this JSON schema:
+Return exactly this JSON schema (all text fields in Korean):
 {{
-  "title": "Daily Collision Report",
-  "summary": "final manager-facing report paragraph",
+  "title": "일일 충돌 위험 보고서",
+  "summary": "최종 관리자용 한국어 보고 단락",
   "risk_distribution": {{"high": 0, "medium": 0, "low": 0}},
   "total_events": 0,
   "key_cases": [
@@ -151,10 +154,10 @@ Return exactly this JSON schema:
       "ttc_s": 0,
       "snapshot_path": "optional saved snapshot path",
       "snapshot_url": "optional saved snapshot url",
-      "why_key": "short official reason"
+      "why_key": "간결한 공식 판정 이유 (한국어)"
     }}
   ],
-  "risk_patterns": ["final report-ready risk pattern"],
-  "improvements": ["final action item"]
+  "risk_patterns": ["최종 보고서용 위험 패턴 (한국어)"],
+  "improvements": ["최종 조치 항목 (한국어)"]
 }}
 """
