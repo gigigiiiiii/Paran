@@ -150,6 +150,11 @@ def ttc_los(person, obs):
 
 
 def closing_speed_los(person, obs):
+    closing_speed = signed_closing_speed_los(person, obs)
+    return closing_speed if closing_speed is not None and closing_speed > 1e-3 else None
+
+
+def signed_closing_speed_los(person, obs):
     rel_vec = obs["point_3d"] - person["point_3d"]
     rel_dist = float(np.linalg.norm(rel_vec))
     if rel_dist < 1e-6:
@@ -161,7 +166,7 @@ def closing_speed_los(person, obs):
     rel_vel = o_vel - p_vel
 
     closing_speed = -float(np.dot(rel_vel, rel_dir))
-    return closing_speed if closing_speed > 1e-3 else None
+    return closing_speed
 
 
 def ttc_forward(person, obs):

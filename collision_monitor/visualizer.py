@@ -93,9 +93,10 @@ def draw_detections(
         cv2.line(canvas, pc, oc, line_color, thickness)
         cv2.circle(canvas, pc, 4, line_color, -1)
         cv2.circle(canvas, oc, 4, line_color, -1)
-        if pair["dist"] is not None:
+        label_dist = pair.get("display_dist", pair.get("dist"))
+        if label_dist is not None:
             mid = ((pc[0] + oc[0]) // 2, (pc[1] + oc[1]) // 2)
-            cv2.putText(canvas, f"{pair['dist']:.2f}m",
+            cv2.putText(canvas, f"{float(label_dist):.2f}m",
                         (mid[0] + 4, mid[1] - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, line_color, 2)
 

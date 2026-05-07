@@ -22,6 +22,7 @@ from .output import maybe_beep, maybe_open_log
 from .visualizer import draw_detections, draw_hud_panel
 from .risk import (
     closing_speed_los,
+    signed_closing_speed_los,
     compute_risk_score,
     risk_color,
     score_to_level,
@@ -69,6 +70,12 @@ class FrameProcessor:
         self.proximity_gate = max(0.0, float(getattr(args, "proximity_gate", 0.0)))
         self.line_max_dist = max(0.0, float(getattr(args, "line_max_dist", 0.0)))
         self.line_smooth_alpha = float(np.clip(getattr(args, "line_smooth_alpha", 0.75), 0.0, 0.99))
+        self.display_distance_smooth_alpha = float(np.clip(getattr(args, "display_distance_smooth_alpha", 0.85), 0.0, 0.99))
+        self.display_distance_step = max(0.0, float(getattr(args, "display_distance_step", 0.05)))
+        self.distance_smooth_alpha = float(np.clip(getattr(args, "distance_smooth_alpha", 0.55), 0.0, 0.99))
+        self.receding_speed_threshold = max(0.0, float(getattr(args, "receding_speed_threshold", 0.15)))
+        self.receding_risk_scale = float(np.clip(getattr(args, "receding_risk_scale", 0.65), 0.0, 1.0))
+        self.confidence_risk_floor = float(np.clip(getattr(args, "confidence_risk_floor", 0.65), 0.0, 1.0))
         self.person_grid_x   = max(1, int(args.person_grid_x))
         self.person_grid_y   = max(1, int(args.person_grid_y))
         self.obstacle_grid_x = max(1, int(args.obstacle_grid_x))
@@ -155,6 +162,8 @@ class FrameProcessor:
         self.risk_score_smooth = 0.0
         self.lock_pairs        : dict = {}  # {(person_id, obs_id): remaining_lock_frames}
         self.line_uv_smooth    : dict = {}  # {(person_id, obs_id): (person_uv, obstacle_uv)}
+        self.pair_dist_smooth  : dict = {}  # {(person_id, obs_id): smoothed_distance_m}
+        self.display_dist_smooth: dict = {}  # {(person_id, obs_id): visual_distance_m}
 
         # ── 기타 ─────────────────────────────────────────────────────────────
         self.history      = deque(maxlen=args.history_size)
@@ -260,6 +269,8 @@ class FrameProcessor:
         self.vel_ema_obstacle = {}
         self.lock_pairs.clear()
         self.line_uv_smooth.clear()
+        self.pair_dist_smooth.clear()
+        self.display_dist_smooth.clear()
 
     def close(self):
         if self.log_file is not None:
@@ -549,6 +560,7 @@ class FrameProcessor:
         closing_speed = None
         nearest_pair  = None
         rep_distance  = None
+        selected_pair_score = None
         all_risk_pairs: list[dict] = []
 
         if has_depth and people and obstacles:
@@ -568,6 +580,9 @@ class FrameProcessor:
                         rep_dist = float(np.sqrt(rep_delta[0]**2 + rep_delta[2]**2))
                         if rep_dist > self.proximity_gate:
                             self.lock_pairs.pop(pair_key, None)
+                            self.pair_dist_smooth.pop(pair_key, None)
+                            self.line_uv_smooth.pop(pair_key, None)
+                            self.display_dist_smooth.pop(pair_key, None)
                             continue
 
                     dist, ps, os_ = min_distance_between_items(
@@ -576,7 +591,21 @@ class FrameProcessor:
                     )
                     if dist is None:
                         self.lock_pairs.pop(pair_key, None)
+                        self.pair_dist_smooth.pop(pair_key, None)
+                        self.line_uv_smooth.pop(pair_key, None)
+                        self.display_dist_smooth.pop(pair_key, None)
                         continue
+
+                    raw_dist = float(dist)
+                    prev_dist = self.pair_dist_smooth.get(pair_key)
+                    if prev_dist is not None and self.distance_smooth_alpha > 0.0:
+                        dist = (
+                            self.distance_smooth_alpha * float(prev_dist)
+                            + (1.0 - self.distance_smooth_alpha) * raw_dist
+                        )
+                    else:
+                        dist = raw_dist
+                    self.pair_dist_smooth[pair_key] = float(dist)
 
                     fwd = person["velocity"]
                     if fwd is None or float(np.linalg.norm(fwd)) < 1e-3:
@@ -586,6 +615,9 @@ class FrameProcessor:
 
                     if angle > args.front_angle:
                         self.lock_pairs.pop(pair_key, None)
+                        self.pair_dist_smooth.pop(pair_key, None)
+                        self.line_uv_smooth.pop(pair_key, None)
+                        self.display_dist_smooth.pop(pair_key, None)
                         continue
 
                     # 쌍별 lock 갱신
@@ -603,6 +635,7 @@ class FrameProcessor:
                     ttc_f    = ttc_forward(pf, of)
                     ttc_l    = ttc_los(pf, of)
                     pair_cs  = closing_speed_los(pf, of)
+                    signed_pair_cs = signed_closing_speed_los(pf, of)
                     if args.ttc_mode == "forward":
                         pair_ttc = ttc_f
                     elif args.ttc_mode == "los":
@@ -620,6 +653,30 @@ class FrameProcessor:
                         close_weight=self.score_close_weight,
                         close_ref=self.score_close_ref,
                     )
+                    is_receding = (
+                        signed_pair_cs is not None
+                        and signed_pair_cs < -self.receding_speed_threshold
+                        and dist > args.danger_dist
+                    )
+                    p_sample_count = len(person.get("collision_samples") or [])
+                    o_sample_count = len(obs.get("collision_samples") or [])
+                    sample_conf = min(1.0, min(p_sample_count, o_sample_count) / 6.0)
+                    det_conf = float(np.clip(min(person.get("conf", 1.0), obs.get("conf", 1.0)), 0.0, 1.0))
+                    pair_conf = float(np.clip(0.65 * sample_conf + 0.35 * det_conf, 0.0, 1.0))
+                    if is_receding:
+                        pair_score *= self.receding_risk_scale
+                        pair_ttc = None
+                    pair_score *= self.confidence_risk_floor + (1.0 - self.confidence_risk_floor) * pair_conf
+                    pair_score = float(np.clip(pair_score, 0.0, 1.0))
+                    display_dist = float(dist)
+                    prev_display_dist = self.display_dist_smooth.get(pair_key)
+                    if prev_display_dist is not None and self.display_distance_smooth_alpha > 0.0:
+                        a = self.display_distance_smooth_alpha
+                        display_dist = a * float(prev_display_dist) + (1.0 - a) * display_dist
+                    if self.display_distance_step > 0.0:
+                        step = self.display_distance_step
+                        display_dist = round(display_dist / step) * step
+                    self.display_dist_smooth[pair_key] = float(display_dist)
                     pair_level = score_to_level(
                         score=pair_score,
                         stable_level="SAFE",
@@ -644,8 +701,11 @@ class FrameProcessor:
                         self.line_uv_smooth[pair_key] = (display_ps_uv, display_os_uv)
                     all_risk_pairs.append({
                         "person": person, "obs": obs,
-                        "dist": dist, "ttc": pair_ttc, "closing_speed": pair_cs,
+                        "dist": dist, "raw_dist": raw_dist, "ttc": pair_ttc,
+                        "display_dist": display_dist,
+                        "closing_speed": pair_cs, "signed_closing_speed": signed_pair_cs,
                         "score": pair_score, "level": pair_level,
+                        "pair_confidence": pair_conf, "is_receding": is_receding,
                         "angle": angle, "fwd": fwd, "ps": ps, "os_": os_,
                         "display_ps_uv": display_ps_uv, "display_os_uv": display_os_uv,
                     })
@@ -657,6 +717,8 @@ class FrameProcessor:
                     if self.lock_pairs[k] <= 0:
                         del self.lock_pairs[k]
                         self.line_uv_smooth.pop(k, None)
+                        self.pair_dist_smooth.pop(k, None)
+                        self.display_dist_smooth.pop(k, None)
 
             # 위험도 높은 순 정렬 → 최상위 쌍을 대표값으로 사용
             all_risk_pairs.sort(key=lambda x: x["score"], reverse=True)
@@ -665,6 +727,7 @@ class FrameProcessor:
                 min_distance = top["dist"]
                 ttc          = top["ttc"]
                 closing_speed = top["closing_speed"]
+                selected_pair_score = top["score"]
                 rep_distance = float(top["dist"])
                 nearest_pair = (
                     top["person"], top["obs"], top["angle"],
@@ -673,7 +736,10 @@ class FrameProcessor:
 
         # ── Risk score ───────────────────────────────────────────────────────
         if has_depth:
-            self.risk_score_raw, _ = compute_risk_score(
+            if selected_pair_score is not None:
+                self.risk_score_raw = float(selected_pair_score)
+            else:
+                self.risk_score_raw, _ = compute_risk_score(
                 min_distance=min_distance, ttc=ttc,
                 closing_speed=closing_speed,
                 warn_dist=args.warn_dist, danger_dist=args.danger_dist,
@@ -682,7 +748,7 @@ class FrameProcessor:
                 ttc_weight=self.score_ttc_weight,
                 close_weight=self.score_close_weight,
                 close_ref=self.score_close_ref,
-            )
+                )
             self.risk_score_smooth = (
                 self.score_alpha * self.risk_score_smooth
                 + (1.0 - self.score_alpha) * self.risk_score_raw

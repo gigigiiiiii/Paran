@@ -176,6 +176,18 @@ class MonitorService:
             args.depth_compare_interval = float(os.getenv("MONITOR_DEPTH_COMPARE_INTERVAL"))
         if os.getenv("MONITOR_MODEL_DEPTH_INTERVAL"):
             args.model_depth_interval = float(os.getenv("MONITOR_MODEL_DEPTH_INTERVAL"))
+        if os.getenv("MONITOR_DISTANCE_SMOOTH_ALPHA"):
+            args.distance_smooth_alpha = float(os.getenv("MONITOR_DISTANCE_SMOOTH_ALPHA"))
+        if os.getenv("MONITOR_DISPLAY_DISTANCE_SMOOTH_ALPHA"):
+            args.display_distance_smooth_alpha = float(os.getenv("MONITOR_DISPLAY_DISTANCE_SMOOTH_ALPHA"))
+        if os.getenv("MONITOR_DISPLAY_DISTANCE_STEP"):
+            args.display_distance_step = float(os.getenv("MONITOR_DISPLAY_DISTANCE_STEP"))
+        if os.getenv("MONITOR_RECEDING_SPEED_THRESHOLD"):
+            args.receding_speed_threshold = float(os.getenv("MONITOR_RECEDING_SPEED_THRESHOLD"))
+        if os.getenv("MONITOR_RECEDING_RISK_SCALE"):
+            args.receding_risk_scale = float(os.getenv("MONITOR_RECEDING_RISK_SCALE"))
+        if os.getenv("MONITOR_CONFIDENCE_RISK_FLOOR"):
+            args.confidence_risk_floor = float(os.getenv("MONITOR_CONFIDENCE_RISK_FLOOR"))
         if os.getenv("MONITOR_FRONT_ANGLE"):
             args.front_angle = float(os.getenv("MONITOR_FRONT_ANGLE"))
         if os.getenv("MONITOR_TTC_MODE"):

@@ -62,7 +62,7 @@ def parse_args(argv=None):
 
     parser.add_argument("--min-obstacle-area-ratio", type=float, default=0.01, help="Ignore small obstacle boxes (ratio)")
     parser.add_argument("--min-obstacle-size-m", type=float, default=0.35, help="Ignore obstacles smaller than this (m)")
-    parser.add_argument("--vehicle-box-expand", type=float, default=1.6, dest="vehicle_box_expand",
+    parser.add_argument("--vehicle-box-expand", type=float, default=1.0, dest="vehicle_box_expand",
                         help="Expand vehicle-class boxes for collision geometry when detections cover only parts like wheels. 1.0 disables.")
     parser.add_argument("--vehicle-box-expand-x", type=float, default=0.25, dest="vehicle_box_expand_x",
                         help="Horizontal vehicle bbox expansion ratio per side when vehicle-box-expand > 1.0")
@@ -109,6 +109,18 @@ def parse_args(argv=None):
                         help="이 거리(m) 이하인 쌍만 연결선을 표시. 0=계산된 모든 쌍 표시")
     parser.add_argument("--line-smooth-alpha", type=float, default=0.75, dest="line_smooth_alpha",
                         help="연결선 끝점 스무딩 EMA 계수(0~0.99). 높을수록 덜 흔들리고 반응은 느림")
+    parser.add_argument("--display-distance-smooth-alpha", type=float, default=0.85, dest="display_distance_smooth_alpha",
+                        help="Visual-only EMA alpha for distance labels on pair lines")
+    parser.add_argument("--display-distance-step", type=float, default=0.05, dest="display_distance_step",
+                        help="Visual-only distance label rounding step in meters. 0 disables")
+    parser.add_argument("--distance-smooth-alpha", type=float, default=0.55, dest="distance_smooth_alpha",
+                        help="Pair distance EMA alpha used for risk calculation (0 disables)")
+    parser.add_argument("--receding-speed-threshold", type=float, default=0.15, dest="receding_speed_threshold",
+                        help="Treat pairs separating faster than this m/s as receding")
+    parser.add_argument("--receding-risk-scale", type=float, default=0.65, dest="receding_risk_scale",
+                        help="Risk score multiplier for receding pairs outside danger distance")
+    parser.add_argument("--confidence-risk-floor", type=float, default=0.65, dest="confidence_risk_floor",
+                        help="Lowest multiplier applied when pair confidence is weak (0~1)")
     parser.add_argument("--risk-up-frames", type=int, default=2,
                         help="Consecutive frames required to raise risk level")
     parser.add_argument("--risk-down-frames", type=int, default=4,
