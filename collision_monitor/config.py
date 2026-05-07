@@ -127,21 +127,21 @@ def parse_args(argv=None):
                         help="Consecutive frames required to lower risk level")
     parser.add_argument("--score-alpha", type=float, default=0.85,
                         help="EMA alpha for risk score smoothing (0~1)")
-    parser.add_argument("--score-dist-weight", type=float, default=0.5,
+    parser.add_argument("--score-dist-weight", type=float, default=0.60,
                         help="Risk score weight for distance component")
-    parser.add_argument("--score-ttc-weight", type=float, default=0.35,
+    parser.add_argument("--score-ttc-weight", type=float, default=0.30,
                         help="Risk score weight for TTC component")
-    parser.add_argument("--score-close-weight", type=float, default=0.15,
+    parser.add_argument("--score-close-weight", type=float, default=0.10,
                         help="Risk score weight for relative closing speed component")
     parser.add_argument("--score-close-ref", type=float, default=1.2,
                         help="Closing speed (m/s) that maps close-score to 1.0")
-    parser.add_argument("--score-warn-on", type=float, default=0.45,
+    parser.add_argument("--score-warn-on", type=float, default=0.40,
                         help="Score threshold to enter WARNING from SAFE")
-    parser.add_argument("--score-danger-on", type=float, default=0.75,
+    parser.add_argument("--score-danger-on", type=float, default=0.58,
                         help="Score threshold to enter DANGER")
-    parser.add_argument("--score-warn-off", type=float, default=0.35,
+    parser.add_argument("--score-warn-off", type=float, default=0.30,
                         help="Score threshold to leave WARNING")
-    parser.add_argument("--score-danger-off", type=float, default=0.65,
+    parser.add_argument("--score-danger-off", type=float, default=0.48,
                         help="Score threshold to leave DANGER")
     parser.add_argument(
         "--ttc-mode",

@@ -527,6 +527,9 @@ class FrameProcessor:
                     v_raw  = (p["point_3d"] - prev_pt) / dt
                     v_prev = self.vel_ema_person.get(tid)
                     v_s    = v_raw if v_prev is None else (alpha * v_prev + (1.0 - alpha) * v_raw)
+                    # depth 노이즈로 인한 미세 떨림 제거: 0.08m/s 미만은 정지로 처리
+                    if float(np.linalg.norm(v_s)) < 0.08:
+                        v_s = np.zeros(3, dtype=np.float32)
                     self.vel_ema_person[tid] = v_s
                     p["velocity"] = v_s
                 else:
@@ -545,6 +548,8 @@ class FrameProcessor:
                     v_raw  = (o["point_3d"] - prev_pt) / dt
                     v_prev = self.vel_ema_obstacle.get(tid)
                     v_s    = v_raw if v_prev is None else (alpha * v_prev + (1.0 - alpha) * v_raw)
+                    if float(np.linalg.norm(v_s)) < 0.08:
+                        v_s = np.zeros(3, dtype=np.float32)
                     self.vel_ema_obstacle[tid] = v_s
                     o["velocity"] = v_s
                 else:
@@ -604,17 +609,16 @@ class FrameProcessor:
                     self.pair_dist_smooth[pair_key] = float(dist)
 
                     fwd = person["velocity"]
-                    if fwd is None or float(np.linalg.norm(fwd)) < 1e-3:
-                        fwd = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-                    obs_pt = os_["point_3d"] if os_ else obs["point_3d"]
-                    angle  = angle_from_forward_vector(fwd, person["point_3d"], obs_pt)
-
-                    if angle > args.front_angle:
-                        self.lock_pairs.pop(pair_key, None)
-                        self.pair_dist_smooth.pop(pair_key, None)
-                        self.line_uv_smooth.pop(pair_key, None)
-                        self.display_dist_smooth.pop(pair_key, None)
-                        continue
+                    person_moving = fwd is not None and float(np.linalg.norm(fwd)) >= 0.08
+                    if person_moving:
+                        obs_pt = os_["point_3d"] if os_ else obs["point_3d"]
+                        angle  = angle_from_forward_vector(fwd, person["point_3d"], obs_pt)
+                        if angle > args.front_angle:
+                            self.lock_pairs.pop(pair_key, None)
+                            self.pair_dist_smooth.pop(pair_key, None)
+                            self.line_uv_smooth.pop(pair_key, None)
+                            self.display_dist_smooth.pop(pair_key, None)
+                            continue
 
                     # 쌍별 lock 갱신
                     if lock_remaining > 0:
@@ -654,9 +658,19 @@ class FrameProcessor:
                         and signed_pair_cs < -self.receding_speed_threshold
                         and dist > args.danger_dist
                     )
-                    p_sample_count = len(person.get("collision_samples") or [])
-                    o_sample_count = len(obs.get("collision_samples") or [])
-                    sample_conf = min(1.0, min(p_sample_count, o_sample_count) / 6.0)
+                    p_samples = person.get("collision_samples") or []
+                    o_samples = obs.get("collision_samples") or []
+                    p_sample_count = len(p_samples)
+                    o_sample_count = len(o_samples)
+                    count_conf = min(1.0, min(p_sample_count, o_sample_count) / 6.0)
+                    # depth 분산이 낮을수록 신뢰도 높음
+                    def _depth_stability(samples):
+                        zs = [s["z"] for s in samples if s.get("z") is not None]
+                        if len(zs) < 2:
+                            return 1.0
+                        return float(1.0 / (1.0 + np.std(zs) * 3.0))
+                    depth_conf = min(_depth_stability(p_samples), _depth_stability(o_samples))
+                    sample_conf = 0.6 * count_conf + 0.4 * depth_conf
                     det_conf = float(np.clip(min(person.get("conf", 1.0), obs.get("conf", 1.0)), 0.0, 1.0))
                     pair_conf = float(np.clip(0.65 * sample_conf + 0.35 * det_conf, 0.0, 1.0))
                     if is_receding:
