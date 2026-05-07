@@ -610,15 +610,15 @@ class FrameProcessor:
 
                     fwd = person["velocity"]
                     person_moving = fwd is not None and float(np.linalg.norm(fwd)) >= 0.08
-                    if person_moving:
-                        obs_pt = os_["point_3d"] if os_ else obs["point_3d"]
-                        angle  = angle_from_forward_vector(fwd, person["point_3d"], obs_pt)
-                        if angle > args.front_angle:
-                            self.lock_pairs.pop(pair_key, None)
-                            self.pair_dist_smooth.pop(pair_key, None)
-                            self.line_uv_smooth.pop(pair_key, None)
-                            self.display_dist_smooth.pop(pair_key, None)
-                            continue
+                    obs_pt = os_["point_3d"] if os_ else obs["point_3d"]
+                    _fwd_for_angle = fwd if person_moving else np.array([0.0, 0.0, 1.0], dtype=np.float32)
+                    angle = angle_from_forward_vector(_fwd_for_angle, person["point_3d"], obs_pt)
+                    if person_moving and angle > args.front_angle:
+                        self.lock_pairs.pop(pair_key, None)
+                        self.pair_dist_smooth.pop(pair_key, None)
+                        self.line_uv_smooth.pop(pair_key, None)
+                        self.display_dist_smooth.pop(pair_key, None)
+                        continue
 
                     # 쌍별 lock 갱신
                     if lock_remaining > 0:
@@ -693,8 +693,8 @@ class FrameProcessor:
                         warn_on=self.score_warn_on,   danger_on=self.score_danger_on,
                         warn_off=self.score_warn_off, danger_off=self.score_danger_off,
                     )
-                    display_ps_uv = ps.get("uv") if ps else None
-                    display_os_uv = os_.get("uv") if os_ else None
+                    display_ps_uv = person.get("rep_uv")
+                    display_os_uv = obs.get("rep_uv")
                     if display_ps_uv is not None and display_os_uv is not None:
                         prev_uvs = self.line_uv_smooth.get(pair_key)
                         if prev_uvs is not None:
