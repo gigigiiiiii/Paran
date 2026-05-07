@@ -82,7 +82,7 @@ class FrameProcessor:
         self.obstacle_grid_y = max(1, int(args.obstacle_grid_y))
         self.vehicle_box_expand = max(1.0, float(getattr(args, "vehicle_box_expand", 1.0)))
         self.vehicle_box_expand_x = max(0.0, float(getattr(args, "vehicle_box_expand_x", 0.0)))
-        self.vehicle_expand_classes = {"car", "truck", "bus", "train", "motorcycle"}
+        self.vehicle_expand_classes: set[str] = set()
 
         # ── 클래스 분류 ───────────────────────────────────────────────────────
         if args.all_non_person:
@@ -349,10 +349,6 @@ class FrameProcessor:
                 name = PERSON_CLASS_NAME
             x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].cpu().numpy()]
             det_bbox = (x1, y1, x2, y2)
-            if name in self.vehicle_expand_classes:
-                x1, y1, x2, y2 = self._expand_vehicle_bbox(
-                    det_bbox, frame_w=frame_w, frame_h=frame_h
-                )
             box_w = max(0, x2 - x1)
             box_h = max(0, y2 - y1)
             area_ratio = (box_w * box_h) / frame_area

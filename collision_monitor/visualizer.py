@@ -59,9 +59,6 @@ def draw_detections(
         label = f"{o['name']}{id_tag}  {o['conf']:.0%}"
         box_color = CLASS_COLORS.get(o["name"], (220, 120, 60))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
-        if det_bbox is not None and tuple(det_bbox) != (x1, y1, x2, y2):
-            dx1, dy1, dx2, dy2 = det_bbox
-            cv2.rectangle(canvas, (dx1, dy1), (dx2, dy2), (120, 120, 120), 1)
         cv2.putText(canvas, label,
                     (x1, max(20, y1 - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
