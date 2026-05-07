@@ -27,6 +27,7 @@ def draw_detections(
     all_risk_pairs: list[dict],
     color: tuple,
     has_depth: bool,
+    line_max_dist: float = 0.0,
 ) -> np.ndarray:
     """사람·장애물 bbox + 모든 위험 쌍 연결선을 canvas에 그린다."""
     for p in people:
@@ -72,15 +73,22 @@ def draw_detections(
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 220), 2)
 
     for pair in all_risk_pairs:
+        if line_max_dist > 0.0 and pair.get("dist") is not None:
+            if float(pair["dist"]) > line_max_dist:
+                continue
         person = pair["person"]
         obs    = pair["obs"]
         px1, py1, px2, py2 = person["bbox"]
         ox1, oy1, ox2, oy2 = obs["bbox"]
-        pc = person.get("rep_uv") or ((px1 + px2) // 2, int(py2 * 0.9))
-        oc = obs.get("rep_uv")   or ((ox1 + ox2) // 2, int(oy2 * 0.9))
+        ps = pair.get("ps") or {}
+        os_ = pair.get("os_") or {}
+        pc = ps.get("uv") or person.get("rep_uv") or ((px1 + px2) // 2, int(py2 * 0.9))
+        oc = os_.get("uv") or obs.get("rep_uv") or ((ox1 + ox2) // 2, int(oy2 * 0.9))
         line_color = _PAIR_COLORS.get(pair["level"], color)
         thickness  = 4 if pair["level"] == "DANGER" else 2
         cv2.line(canvas, pc, oc, line_color, thickness)
+        cv2.circle(canvas, pc, 4, line_color, -1)
+        cv2.circle(canvas, oc, 4, line_color, -1)
         if pair["dist"] is not None:
             mid = ((pc[0] + oc[0]) // 2, (pc[1] + oc[1]) // 2)
             cv2.putText(canvas, f"{pair['dist']:.2f}m",

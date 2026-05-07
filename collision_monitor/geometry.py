@@ -52,6 +52,41 @@ def bbox_grid_points(bbox, grid_x=3, grid_y=3):
     return points
 
 
+def bbox_surface_points(bbox, grid_x=3, grid_y=3):
+    x1, y1, x2, y2 = bbox
+    box_w = max(1, x2 - x1)
+    box_h = max(1, y2 - y1)
+    inset_x = min(0.08, 2.0 / box_w)
+    inset_y = min(0.08, 2.0 / box_h)
+
+    x_fracs = [inset_x, 0.5, 1.0 - inset_x]
+    y_fracs = [inset_y, 0.5, 0.82, 1.0 - inset_y]
+    if grid_x >= 4:
+        x_fracs.extend([0.25, 0.75])
+    if grid_y >= 4:
+        y_fracs.extend([0.65, 0.9])
+
+    candidates = []
+    for fx in x_fracs:
+        candidates.append((fx, inset_y))
+        candidates.append((fx, 1.0 - inset_y))
+    for fy in y_fracs:
+        candidates.append((inset_x, fy))
+        candidates.append((1.0 - inset_x, fy))
+
+    points = []
+    used = set()
+    for fx, fy in candidates:
+        u = int(round(x1 + float(np.clip(fx, 0.0, 1.0)) * box_w))
+        v = int(round(y1 + float(np.clip(fy, 0.0, 1.0)) * box_h))
+        key = (u, v)
+        if key in used:
+            continue
+        used.add(key)
+        points.append(key)
+    return points
+
+
 def build_collision_samples(
     depth_image,
     bbox,
@@ -66,7 +101,9 @@ def build_collision_samples(
     sample_z_max_offset,
 ):
     samples = []
-    for u, v in bbox_grid_points(bbox, grid_x=grid_x, grid_y=grid_y):
+    sample_uvs = bbox_grid_points(bbox, grid_x=grid_x, grid_y=grid_y)
+    sample_uvs.extend(bbox_surface_points(bbox, grid_x=grid_x, grid_y=grid_y))
+    for u, v in sample_uvs:
         z_med = depth_median_around_uv(depth_image, u, v, depth_scale, win=win)
         z_near = depth_near_around_uv(
             depth_image, u, v, depth_scale, win=win, percentile=near_percentile, min_valid=10

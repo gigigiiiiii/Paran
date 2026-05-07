@@ -64,6 +64,8 @@ class FrameProcessor:
         self.pair_distance_percentile = float(
             np.clip(args.pair_distance_percentile, 1.0, 50.0)
         )
+        self.proximity_gate = max(0.0, float(getattr(args, "proximity_gate", 0.0)))
+        self.line_max_dist = max(0.0, float(getattr(args, "line_max_dist", 0.0)))
         self.person_grid_x   = max(1, int(args.person_grid_x))
         self.person_grid_y   = max(1, int(args.person_grid_y))
         self.obstacle_grid_x = max(1, int(args.obstacle_grid_x))
@@ -503,6 +505,13 @@ class FrameProcessor:
                     pair_key = (p_tid, o_tid)
                     lock_remaining = self.lock_pairs.get(pair_key, 0)
 
+                    if self.proximity_gate > 0.0:
+                        rep_delta = person["point_3d"] - obs["point_3d"]
+                        rep_dist = float(np.sqrt(rep_delta[0]**2 + rep_delta[2]**2))
+                        if rep_dist > self.proximity_gate:
+                            self.lock_pairs.pop(pair_key, None)
+                            continue
+
                     dist, ps, os_ = min_distance_between_items(
                         person, obs,
                         distance_percentile=self.pair_distance_percentile
@@ -580,9 +589,7 @@ class FrameProcessor:
                 min_distance = top["dist"]
                 ttc          = top["ttc"]
                 closing_speed = top["closing_speed"]
-                rep_distance = float(np.linalg.norm(
-                    top["person"]["point_3d"] - top["obs"]["point_3d"]
-                ))
+                rep_distance = float(top["dist"])
                 nearest_pair = (
                     top["person"], top["obs"], top["angle"],
                     top["fwd"], top["ps"], top["os_"],
@@ -627,7 +634,10 @@ class FrameProcessor:
         canvas = color_image.copy()
 
         if draw_detection:
-            canvas = draw_detections(canvas, people, obstacles, all_risk_pairs, color, has_depth)
+            canvas = draw_detections(
+                canvas, people, obstacles, all_risk_pairs, color, has_depth,
+                line_max_dist=self.line_max_dist,
+            )
 
         if draw_info_panel:
             # depth 모델 vs RealSense 오차 통계 계산

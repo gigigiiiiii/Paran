@@ -96,6 +96,8 @@ def parse_args(argv=None):
                         help="Robust percentile (1~50) for person-obstacle sample distance")
     parser.add_argument("--proximity-gate", type=float, default=4.0, dest="proximity_gate",
                         help="센터-투-센터 3D 거리가 이 값(m) 초과인 쌍은 거리 계산·연결선 생략. 0=비활성")
+    parser.add_argument("--line-max-dist", type=float, default=0.0, dest="line_max_dist",
+                        help="이 거리(m) 이하인 쌍만 연결선을 표시. 0=계산된 모든 쌍 표시")
     parser.add_argument("--risk-up-frames", type=int, default=2,
                         help="Consecutive frames required to raise risk level")
     parser.add_argument("--risk-down-frames", type=int, default=4,
