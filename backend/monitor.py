@@ -141,6 +141,10 @@ class MonitorService:
             args.conf = float(os.getenv("MONITOR_CONF"))
         if os.getenv("MONITOR_IMGSZ"):
             args.imgsz = int(os.getenv("MONITOR_IMGSZ"))
+        if os.getenv("MONITOR_VEHICLE_BOX_EXPAND"):
+            args.vehicle_box_expand = float(os.getenv("MONITOR_VEHICLE_BOX_EXPAND"))
+        if os.getenv("MONITOR_VEHICLE_BOX_EXPAND_X"):
+            args.vehicle_box_expand_x = float(os.getenv("MONITOR_VEHICLE_BOX_EXPAND_X"))
         if os.getenv("MONITOR_WIDTH"):
             args.width = int(os.getenv("MONITOR_WIDTH"))
         if os.getenv("MONITOR_HEIGHT"):
@@ -170,6 +174,8 @@ class MonitorService:
             args.depth_fov = float(os.getenv("MONITOR_DEPTH_FOV"))
         if os.getenv("MONITOR_DEPTH_COMPARE_INTERVAL"):
             args.depth_compare_interval = float(os.getenv("MONITOR_DEPTH_COMPARE_INTERVAL"))
+        if os.getenv("MONITOR_MODEL_DEPTH_INTERVAL"):
+            args.model_depth_interval = float(os.getenv("MONITOR_MODEL_DEPTH_INTERVAL"))
         if os.getenv("MONITOR_FRONT_ANGLE"):
             args.front_angle = float(os.getenv("MONITOR_FRONT_ANGLE"))
         if os.getenv("MONITOR_TTC_MODE"):

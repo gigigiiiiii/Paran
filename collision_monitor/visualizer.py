@@ -53,11 +53,15 @@ def draw_detections(
 
     for o in obstacles:
         x1, y1, x2, y2 = o["bbox"]
+        det_bbox = o.get("det_bbox")
         tid    = o.get("track_id")
         id_tag = f" #{tid}" if tid is not None else ""
         label = f"{o['name']}{id_tag}  {o['conf']:.0%}"
         box_color = CLASS_COLORS.get(o["name"], (220, 120, 60))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
+        if det_bbox is not None and tuple(det_bbox) != (x1, y1, x2, y2):
+            dx1, dy1, dx2, dy2 = det_bbox
+            cv2.rectangle(canvas, (dx1, dy1), (dx2, dy2), (120, 120, 120), 1)
         cv2.putText(canvas, label,
                     (x1, max(20, y1 - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
@@ -82,8 +86,8 @@ def draw_detections(
         ox1, oy1, ox2, oy2 = obs["bbox"]
         ps = pair.get("ps") or {}
         os_ = pair.get("os_") or {}
-        pc = ps.get("uv") or person.get("rep_uv") or ((px1 + px2) // 2, int(py2 * 0.9))
-        oc = os_.get("uv") or obs.get("rep_uv") or ((ox1 + ox2) // 2, int(oy2 * 0.9))
+        pc = pair.get("display_ps_uv") or ps.get("uv") or person.get("rep_uv") or ((px1 + px2) // 2, int(py2 * 0.9))
+        oc = pair.get("display_os_uv") or os_.get("uv") or obs.get("rep_uv") or ((ox1 + ox2) // 2, int(oy2 * 0.9))
         line_color = _PAIR_COLORS.get(pair["level"], color)
         thickness  = 4 if pair["level"] == "DANGER" else 2
         cv2.line(canvas, pc, oc, line_color, thickness)

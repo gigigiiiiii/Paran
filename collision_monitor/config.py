@@ -62,6 +62,10 @@ def parse_args(argv=None):
 
     parser.add_argument("--min-obstacle-area-ratio", type=float, default=0.01, help="Ignore small obstacle boxes (ratio)")
     parser.add_argument("--min-obstacle-size-m", type=float, default=0.35, help="Ignore obstacles smaller than this (m)")
+    parser.add_argument("--vehicle-box-expand", type=float, default=1.6, dest="vehicle_box_expand",
+                        help="Expand vehicle-class boxes for collision geometry when detections cover only parts like wheels. 1.0 disables.")
+    parser.add_argument("--vehicle-box-expand-x", type=float, default=0.25, dest="vehicle_box_expand_x",
+                        help="Horizontal vehicle bbox expansion ratio per side when vehicle-box-expand > 1.0")
 
     parser.add_argument("--lock-frames", type=int, default=10, help="Keep nearest pair lock for N frames")
     parser.add_argument("--lock-max-dist", type=float, default=0.6, help="Max per-object displacement (m) to keep lock")
@@ -92,12 +96,19 @@ def parse_args(argv=None):
                         help="Blend weight of near depth percentile against median depth (0~1)")
     parser.add_argument("--sample-z-max-offset", type=float, default=0.8,
                         help="Reject collision samples if depth differs from object base depth by more than this (m)")
+    parser.add_argument("--depth-fusion", type=str, default="fallback",
+                        choices=["realsense", "fallback", "fused"],
+                        help="Collision depth source: realsense / fallback(model only when RealSense is invalid) / fused")
+    parser.add_argument("--model-depth-weight", type=float, default=0.35, dest="model_depth_weight",
+                        help="Model depth blend weight when --depth-fusion=fused (0~1)")
     parser.add_argument("--pair-distance-percentile", type=float, default=20.0,
                         help="Robust percentile (1~50) for person-obstacle sample distance")
     parser.add_argument("--proximity-gate", type=float, default=4.0, dest="proximity_gate",
                         help="센터-투-센터 3D 거리가 이 값(m) 초과인 쌍은 거리 계산·연결선 생략. 0=비활성")
     parser.add_argument("--line-max-dist", type=float, default=0.0, dest="line_max_dist",
                         help="이 거리(m) 이하인 쌍만 연결선을 표시. 0=계산된 모든 쌍 표시")
+    parser.add_argument("--line-smooth-alpha", type=float, default=0.75, dest="line_smooth_alpha",
+                        help="연결선 끝점 스무딩 EMA 계수(0~0.99). 높을수록 덜 흔들리고 반응은 느림")
     parser.add_argument("--risk-up-frames", type=int, default=2,
                         help="Consecutive frames required to raise risk level")
     parser.add_argument("--risk-down-frames", type=int, default=4,
@@ -134,7 +145,14 @@ def parse_args(argv=None):
         type=float,
         default=2.0,
         dest="depth_compare_interval",
-        help="라이브 모드에서 depth 비교 추론 간격(초). GPU 경쟁 방지. 기본 2.0초.",
+        help="RealSense 비교용 depth 모델 추론 간격(초). 기본 2.0초.",
+    )
+    parser.add_argument(
+        "--model-depth-interval",
+        type=float,
+        default=0.2,
+        dest="model_depth_interval",
+        help="RealSense 없이 모델 depth를 실제 거리로 쓸 때 추론 간격(초). 0=가능한 매 프레임",
     )
     parser.add_argument(
         "--depth-model",

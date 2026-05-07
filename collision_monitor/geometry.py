@@ -99,8 +99,16 @@ def build_collision_samples(
     near_weight,
     base_z,
     sample_z_max_offset,
+    model_depth_image=None,
+    model_depth_scale=1.0,
+    model_depth_scale_factor=1.0,
+    depth_fusion="realsense",
+    model_depth_weight=0.0,
 ):
     samples = []
+    depth_fusion = str(depth_fusion or "realsense").lower()
+    model_depth_weight = float(np.clip(model_depth_weight, 0.0, 1.0))
+    model_depth_scale_factor = float(model_depth_scale_factor)
     sample_uvs = bbox_grid_points(bbox, grid_x=grid_x, grid_y=grid_y)
     sample_uvs.extend(bbox_surface_points(bbox, grid_x=grid_x, grid_y=grid_y))
     for u, v in sample_uvs:
@@ -115,6 +123,23 @@ def build_collision_samples(
             near_weight=near_weight,
             max_offset=sample_z_max_offset,
         )
+        z_model = None
+        if depth_fusion != "realsense" and model_depth_image is not None:
+            z_model = depth_median_around_uv(
+                model_depth_image, u, v, model_depth_scale, win=win
+            )
+            if z_model is not None:
+                z_model = float(z_model) * model_depth_scale_factor
+
+        if z_model is not None:
+            model_ok = True
+            if base_z is not None and sample_z_max_offset > 0.0:
+                model_ok = abs(float(z_model) - float(base_z)) <= float(sample_z_max_offset)
+            if z is None and model_ok:
+                z = z_model
+            elif z is not None and depth_fusion == "fused" and model_ok:
+                z = (1.0 - model_depth_weight) * float(z) + model_depth_weight * z_model
+
         if z is None:
             continue
         samples.append({

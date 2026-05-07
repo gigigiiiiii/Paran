@@ -61,15 +61,21 @@ class FrameProcessor:
         )
         self.near_weight           = float(np.clip(args.depth_near_weight, 0.0, 1.0))
         self.sample_z_max_offset   = max(0.0, float(args.sample_z_max_offset))
+        self.depth_fusion          = str(getattr(args, "depth_fusion", "fallback")).lower()
+        self.model_depth_weight    = float(np.clip(getattr(args, "model_depth_weight", 0.35), 0.0, 1.0))
         self.pair_distance_percentile = float(
             np.clip(args.pair_distance_percentile, 1.0, 50.0)
         )
         self.proximity_gate = max(0.0, float(getattr(args, "proximity_gate", 0.0)))
         self.line_max_dist = max(0.0, float(getattr(args, "line_max_dist", 0.0)))
+        self.line_smooth_alpha = float(np.clip(getattr(args, "line_smooth_alpha", 0.75), 0.0, 0.99))
         self.person_grid_x   = max(1, int(args.person_grid_x))
         self.person_grid_y   = max(1, int(args.person_grid_y))
         self.obstacle_grid_x = max(1, int(args.obstacle_grid_x))
         self.obstacle_grid_y = max(1, int(args.obstacle_grid_y))
+        self.vehicle_box_expand = max(1.0, float(getattr(args, "vehicle_box_expand", 1.0)))
+        self.vehicle_box_expand_x = max(0.0, float(getattr(args, "vehicle_box_expand_x", 0.0)))
+        self.vehicle_expand_classes = {"car", "truck", "bus", "train", "motorcycle"}
 
         # ── 클래스 분류 ───────────────────────────────────────────────────────
         if args.all_non_person:
@@ -148,6 +154,7 @@ class FrameProcessor:
         self.risk_score_raw    = 0.0
         self.risk_score_smooth = 0.0
         self.lock_pairs        : dict = {}  # {(person_id, obs_id): remaining_lock_frames}
+        self.line_uv_smooth    : dict = {}  # {(person_id, obs_id): (person_uv, obstacle_uv)}
 
         # ── 기타 ─────────────────────────────────────────────────────────────
         self.history      = deque(maxlen=args.history_size)
@@ -181,6 +188,27 @@ class FrameProcessor:
             self._pending_level = None
             self._pending_count = 0
         return self.stable_level
+
+    def _expand_vehicle_bbox(self, bbox, frame_w, frame_h):
+        if self.vehicle_box_expand <= 1.0:
+            return bbox
+        x1, y1, x2, y2 = bbox
+        w = max(1, x2 - x1)
+        h = max(1, y2 - y1)
+        extra_h = h * (self.vehicle_box_expand - 1.0)
+        extra_x = w * self.vehicle_box_expand_x
+
+        nx1 = int(round(x1 - extra_x))
+        nx2 = int(round(x2 + extra_x))
+        # Partial vehicle detections often sit on wheels, so grow mostly upward.
+        ny1 = int(round(y1 - extra_h))
+        ny2 = int(round(y2 + extra_h * 0.15))
+
+        nx1 = max(0, min(frame_w - 1, nx1))
+        nx2 = max(nx1 + 1, min(frame_w, nx2))
+        ny1 = max(0, min(frame_h - 1, ny1))
+        ny2 = max(ny1 + 1, min(frame_h, ny2))
+        return (nx1, ny1, nx2, ny2)
 
     def _infer_sahi(self, color_image: np.ndarray, conf: float) -> list:
         """SAHI sliced inference → ultralytics box 호환 래퍼 리스트 반환"""
@@ -231,6 +259,7 @@ class FrameProcessor:
         self.vel_ema_person   = {}
         self.vel_ema_obstacle = {}
         self.lock_pairs.clear()
+        self.line_uv_smooth.clear()
 
     def close(self):
         if self.log_file is not None:
@@ -308,6 +337,11 @@ class FrameProcessor:
             if name in PERSON_CLASS_ALIASES:
                 name = PERSON_CLASS_NAME
             x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].cpu().numpy()]
+            det_bbox = (x1, y1, x2, y2)
+            if name in self.vehicle_expand_classes:
+                x1, y1, x2, y2 = self._expand_vehicle_bbox(
+                    det_bbox, frame_w=frame_w, frame_h=frame_h
+                )
             box_w = max(0, x2 - x1)
             box_h = max(0, y2 - y1)
             area_ratio = (box_w * box_h) / frame_area
@@ -317,6 +351,7 @@ class FrameProcessor:
 
             # depth 계산
             z = None
+            model_z = None
             point_3d = None
             collision_samples = []
 
@@ -335,6 +370,22 @@ class FrameProcessor:
                     z = median_depth_from_bbox(
                         depth_image, (x1, y1, x2, y2), depth_scale
                     )
+                if model_depth_image is not None:
+                    model_z = depth_median_bottom_band(
+                        model_depth_image, (x1, y1, x2, y2), 1.0,
+                        band_ratio=args.depth_bottom_band,
+                    )
+                    if model_z is None:
+                        model_z = median_depth_from_bbox(
+                            model_depth_image, (x1, y1, x2, y2), 1.0
+                        )
+
+                model_depth_scale_factor = 1.0
+                if z is not None and model_z is not None and model_z > 0:
+                    model_depth_scale_factor = float(z) / float(model_z)
+                elif z is None and model_z is not None and self.depth_fusion != "realsense":
+                    z = float(model_z)
+
                 if z is None:
                     continue
 
@@ -343,6 +394,8 @@ class FrameProcessor:
                 )
                 if z_uv is not None:
                     z = z_uv
+                    if model_z is not None and model_z > 0:
+                        model_depth_scale_factor = float(z) / float(model_z)
 
                 width_m  = (box_w / intrinsics.fx) * z
                 height_m = (box_h / intrinsics.fy) * z
@@ -372,6 +425,11 @@ class FrameProcessor:
                         near_weight=self.near_weight,
                         base_z=z,
                         sample_z_max_offset=self.sample_z_max_offset,
+                        model_depth_image=model_depth_image,
+                        model_depth_scale=1.0,
+                        model_depth_scale_factor=model_depth_scale_factor,
+                        depth_fusion=self.depth_fusion,
+                        model_depth_weight=self.model_depth_weight,
                     )
                     if not collision_samples:
                         collision_samples = [{"uv": (u, v), "z": z, "point_3d": point_3d}]
@@ -390,8 +448,7 @@ class FrameProcessor:
                 track_id = None
 
             # 비교용 모델 depth (RealSense live 모드에서 depth 모델과 비교)
-            model_z = None
-            if model_depth_image is not None:
+            if model_depth_image is not None and model_z is None:
                 from .depth import depth_median_bottom_band, median_depth_from_bbox
                 model_z = depth_median_bottom_band(
                     model_depth_image, (x1, y1, x2, y2), 1.0,
@@ -404,6 +461,7 @@ class FrameProcessor:
 
             item = {
                 "bbox"             : (x1, y1, x2, y2),
+                "det_bbox"         : det_bbox,
                 "name"             : name,
                 "conf"             : conf,
                 "z"                : z,
@@ -568,11 +626,28 @@ class FrameProcessor:
                         warn_on=self.score_warn_on,   danger_on=self.score_danger_on,
                         warn_off=self.score_warn_off, danger_off=self.score_danger_off,
                     )
+                    display_ps_uv = ps.get("uv") if ps else None
+                    display_os_uv = os_.get("uv") if os_ else None
+                    if display_ps_uv is not None and display_os_uv is not None:
+                        prev_uvs = self.line_uv_smooth.get(pair_key)
+                        if prev_uvs is not None:
+                            a = self.line_smooth_alpha
+                            prev_p_uv, prev_o_uv = prev_uvs
+                            display_ps_uv = (
+                                int(round(a * prev_p_uv[0] + (1.0 - a) * display_ps_uv[0])),
+                                int(round(a * prev_p_uv[1] + (1.0 - a) * display_ps_uv[1])),
+                            )
+                            display_os_uv = (
+                                int(round(a * prev_o_uv[0] + (1.0 - a) * display_os_uv[0])),
+                                int(round(a * prev_o_uv[1] + (1.0 - a) * display_os_uv[1])),
+                            )
+                        self.line_uv_smooth[pair_key] = (display_ps_uv, display_os_uv)
                     all_risk_pairs.append({
                         "person": person, "obs": obs,
                         "dist": dist, "ttc": pair_ttc, "closing_speed": pair_cs,
                         "score": pair_score, "level": pair_level,
                         "angle": angle, "fwd": fwd, "ps": ps, "os_": os_,
+                        "display_ps_uv": display_ps_uv, "display_os_uv": display_os_uv,
                     })
 
             # 이번 프레임에 활성화되지 않은 lock 쌍 TTL 감소 및 정리
@@ -581,6 +656,7 @@ class FrameProcessor:
                     self.lock_pairs[k] -= 1
                     if self.lock_pairs[k] <= 0:
                         del self.lock_pairs[k]
+                        self.line_uv_smooth.pop(k, None)
 
             # 위험도 높은 순 정렬 → 최상위 쌍을 대표값으로 사용
             all_risk_pairs.sort(key=lambda x: x["score"], reverse=True)

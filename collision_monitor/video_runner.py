@@ -44,7 +44,7 @@ class VideoRunner:
         self._dm_stop           = threading.Event()
         self._dm_thread         = None
         self._dm_last_submit_ts = 0.0
-        self._dm_interval_sec   = float(getattr(args, "depth_compare_interval", 2.0))
+        self._dm_interval_sec   = max(0.0, float(getattr(args, "model_depth_interval", 0.2)))
 
         depth_model_id = getattr(args, "depth_model", "none")
         if depth_model_id and depth_model_id.lower() != "none":
