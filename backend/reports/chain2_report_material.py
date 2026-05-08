@@ -37,6 +37,7 @@ def build_report_material(
     chain1_output: dict[str, Any],
     use_llm: bool = True,
     rule_material: dict[str, Any] | None = None,
+    llm_provider: str | None = None,
 ) -> dict[str, Any]:
     rule_output = rule_material or _rule_build_report_material(chain1_output)
     if not use_llm:
@@ -51,6 +52,7 @@ def build_report_material(
                 "rule_material_json": dumps_for_prompt(rule_output),
             },
             output_model=Chain2Output,
+            provider=llm_provider,
         )
         return _normalize_llm_chain2_output(llm_output, rule_output, chain1_output)
     except Exception as exc:

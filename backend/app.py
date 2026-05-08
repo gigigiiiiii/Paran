@@ -43,9 +43,11 @@ _load_env_file(Path(__file__).resolve().with_name(".env"))
 try:
     from .monitor import MonitorService  # 패키지로 임포트 시
     from .reports import DailyReportScheduler, DashboardReportGenerator
+    from .reports.llm_utils import check_local_runtime, llm_runtime_info
 except ImportError:
     from monitor import MonitorService   # uvicorn app:app 직접 실행 시
     from reports import DailyReportScheduler, DashboardReportGenerator
+    from reports.llm_utils import check_local_runtime, llm_runtime_info
 
 
 service = MonitorService()
@@ -60,6 +62,7 @@ report_scheduler = DailyReportScheduler(
     report_generator,
     run_at=os.getenv("REPORT_DAILY_RUN_AT", "23:59"),
     output_format=os.getenv("REPORT_OUTPUT_FORMAT", "pdf"),
+    llm_provider=os.getenv("REPORT_LLM_PROVIDER"),
 )
 
 
@@ -182,6 +185,7 @@ def generate_daily_report(
     date_: str | None = Query(default=None, alias="date"),
     session_id: str | None = Query(default=None),
     format: str = Query(default="pdf", pattern="^pdf$"),
+    llm_provider: str | None = Query(default=None, pattern="^(api|local|gemini|qwen)$"),
     download: bool = Query(default=False),
 ):
     normalized_session_id = session_id.strip() if session_id else None
@@ -192,6 +196,7 @@ def generate_daily_report(
             target_date=_parse_report_date(date_),
             session_id=normalized_session_id,
             output_format=format,
+            llm_provider=llm_provider,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -204,6 +209,7 @@ def generate_daily_report(
         "path": result["path"],
         "format": result["format"],
         "output": result["output"],
+        "llm_provider": result.get("llm_provider"),
         "download_url": f"/api/reports/files/{Path(result['path']).name}",
         "report_date": result["report_date"],
         "chain1": {
@@ -221,6 +227,19 @@ def generate_daily_report(
 @app.get("/api/reports/scheduler")
 def get_report_scheduler_state():
     return report_scheduler.state()
+
+
+@app.get("/api/reports/llm/status")
+def get_report_llm_status(
+    llm_provider: str | None = Query(default=None, pattern="^(api|local|gemini|qwen)$"),
+):
+    info = llm_runtime_info(llm_provider)
+    if info["provider"] == "local":
+        return check_local_runtime(info["model"])
+    return {
+        **info,
+        "api_key_configured": bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")),
+    }
 
 
 @app.get("/api/reports/files/{filename}")
@@ -244,6 +263,7 @@ def run_report_scheduler_once(date_: str | None = Query(default=None, alias="dat
         "path": result["path"],
         "format": result["format"],
         "output": result["output"],
+        "llm_provider": result.get("llm_provider"),
         "report_date": result["report_date"],
         "chain2": result["chain2"],
         "chain3": {

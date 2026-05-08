@@ -136,6 +136,7 @@ def validate_events(
     events: list[dict[str, Any]],
     use_llm: bool = True,
     rule_output: dict[str, Any] | None = None,
+    llm_provider: str | None = None,
 ) -> dict[str, Any]:
     rule_output = rule_output or _rule_validate_events(events)
     if not use_llm or not events:
@@ -166,6 +167,7 @@ def validate_events(
                 "rule_output_json": dumps_for_prompt(rule_output),
             },
             output_model=Chain1Output,
+            provider=llm_provider,
         )
         return _normalize_llm_chain1_output(events, llm_output)
     except Exception as exc:

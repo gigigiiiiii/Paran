@@ -15,10 +15,12 @@ class DailyReportScheduler:
         generator: DashboardReportGenerator,
         run_at: str = "23:59",
         output_format: str = "pdf",
+        llm_provider: str | None = None,
     ):
         self._generator = generator
         self._run_at = run_at
         self._output_format = output_format
+        self._llm_provider = llm_provider
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_run_date: date | None = None
@@ -42,13 +44,18 @@ class DailyReportScheduler:
             "running": self._thread is not None and self._thread.is_alive(),
             "run_at": self._run_at,
             "output_format": self._output_format,
+            "llm_provider": self._llm_provider,
             "last_run_date": self._last_run_date.isoformat() if self._last_run_date else None,
             "last_result": self._last_result,
         }
 
     def run_once(self, target_date: date | None = None) -> dict[str, Any]:
         run_date = target_date or datetime.now().astimezone().date()
-        result = self._generator.generate(target_date=run_date, output_format=self._output_format)
+        result = self._generator.generate(
+            target_date=run_date,
+            output_format=self._output_format,
+            llm_provider=self._llm_provider,
+        )
         self._last_run_date = run_date
         self._last_result = {
             "ok": result.get("ok"),

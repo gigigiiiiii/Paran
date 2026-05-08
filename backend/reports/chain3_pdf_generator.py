@@ -11,7 +11,7 @@ from typing import Any, Callable
 from .chain1_event_validator import event_datetime, validate_events
 from .chain2_report_material import build_report_material
 from .image_utils import attach_snapshot_urls
-from .llm_utils import dumps_for_prompt, run_llm_json_chain
+from .llm_utils import dumps_for_prompt, normalize_llm_provider, run_llm_json_chain
 from .prompts import CHAIN3_HUMAN_TEMPLATE, CHAIN3_SYSTEM_PROMPT
 from .schemas import Chain3Output, validate_model
 
@@ -171,7 +171,11 @@ def write_daily_report_pdf(
     return path
 
 
-def prepare_final_report_material(chain2_output: dict[str, Any], use_llm: bool = True) -> dict[str, Any]:
+def prepare_final_report_material(
+    chain2_output: dict[str, Any],
+    use_llm: bool = True,
+    llm_provider: str | None = None,
+) -> dict[str, Any]:
     if not use_llm:
         return chain2_output
 
@@ -181,6 +185,7 @@ def prepare_final_report_material(chain2_output: dict[str, Any], use_llm: bool =
             CHAIN3_HUMAN_TEMPLATE,
             {"chain2_json": dumps_for_prompt(chain2_output)},
             output_model=Chain3Output,
+            provider=llm_provider,
         )
         final_output = dict(chain2_output)
         for key in ("title", "summary", "key_cases", "risk_patterns", "improvements"):
@@ -260,20 +265,23 @@ class DashboardReportGenerator:
         target_date: date | None = None,
         session_id: str | None = None,
         events: list[dict[str, Any]] | None = None,
+        llm_provider: str | None = None,
     ) -> dict[str, Any]:
         report_date = target_date or datetime.now().astimezone().date()
+        selected_provider = normalize_llm_provider(llm_provider)
         source_events = list(events) if events is not None else self.fetch_dashboard_events(session_id=session_id)
         filtered_events = self.filter_events(source_events, target_date=target_date)
         filtered_events = attach_snapshot_urls(filtered_events, self._supabase_url, self._snapshot_bucket)
 
-        chain1_output = validate_events(filtered_events)
-        chain2_output = build_report_material(chain1_output)
-        chain3_output = prepare_final_report_material(chain2_output)
+        chain1_output = validate_events(filtered_events, llm_provider=selected_provider)
+        chain2_output = build_report_material(chain1_output, llm_provider=selected_provider)
+        chain3_output = prepare_final_report_material(chain2_output, llm_provider=selected_provider)
         pdf_path = write_daily_report_pdf(chain3_output, self._output_dir, report_date)
         return {
             "ok": True,
             "path": str(pdf_path),
             "format": "pdf",
+            "llm_provider": selected_provider,
             "report_date": report_date.isoformat(),
             "chain1": chain1_output,
             "chain2": chain2_output,
@@ -286,10 +294,11 @@ class DashboardReportGenerator:
         target_date: date | None = None,
         session_id: str | None = None,
         output_format: str = "pdf",
+        llm_provider: str | None = None,
     ) -> dict[str, Any]:
         if output_format.lower() != "pdf":
             raise ValueError("daily report chain output is PDF only")
-        return self.run_chains(target_date=target_date, session_id=session_id)
+        return self.run_chains(target_date=target_date, session_id=session_id, llm_provider=llm_provider)
 
 
 def _preserve_case_evidence(

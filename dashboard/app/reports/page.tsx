@@ -16,6 +16,7 @@ type ReportResponse = {
   output?: string;
   download_url?: string;
   report_date?: string;
+  llm_provider?: "api" | "local" | "gemini" | "qwen";
   chain1?: {
     validated_count?: number;
     risk_summary?: RiskSummary;
@@ -32,6 +33,8 @@ type ReportResponse = {
     improvements?: string[];
   };
 };
+
+type LlmProvider = "api" | "local";
 
 type SessionSummaryApi = {
   session_id?: string | null;
@@ -57,14 +60,16 @@ function formatSessionLabel(session: SessionSummaryApi): string {
   return `${sid} (${total}건)`;
 }
 
-function buildReportQuery(sessionId: string) {
+function buildReportQuery(sessionId: string, llmProvider: LlmProvider) {
   const query = new URLSearchParams({ format: "pdf" });
+  query.set("llm_provider", llmProvider);
   if (sessionId) query.set("session_id", sessionId);
   return query.toString();
 }
 
 export default function ReportsPage() {
   const [sessionId, setSessionId] = useState<string>("");
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>("api");
   const [sessions, setSessions] = useState<SessionSummaryApi[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -104,7 +109,7 @@ export default function ReportsPage() {
     setLoading(true);
     setError(null);
     try {
-      const query = buildReportQuery(sessionId);
+      const query = buildReportQuery(sessionId, llmProvider);
       const response = await fetch(`${API_BASE}/api/reports/daily?${query}`, { cache: "no-store" });
       if (!response.ok) {
         let detail = `report status ${response.status}`;
@@ -194,6 +199,18 @@ export default function ReportsPage() {
                     ))}
                   </select>
                 </label>
+                <label className="logsField">
+                  <span>Output Mode</span>
+                  <select
+                    className="logsInput"
+                    value={llmProvider}
+                    onChange={(event) => setLlmProvider(event.target.value as LlmProvider)}
+                    disabled={loading}
+                  >
+                    <option value="api">API</option>
+                    <option value="local">Local</option>
+                  </select>
+                </label>
                 <button type="button" className="reportPrimaryButton" disabled={loading} onClick={generateReport}>
                   <span className="material-symbols-outlined">{loading ? "hourglass_top" : "auto_awesome"}</span>
                   {loading ? "Generating..." : "Generate PDF"}
@@ -211,7 +228,7 @@ export default function ReportsPage() {
                   <span className="material-symbols-outlined">task_alt</span>
                   Latest Output
                 </h3>
-                <span className="tinyPill">{report?.output ?? "No report"}</span>
+                <span className="tinyPill">{report?.llm_provider ? report.llm_provider.toUpperCase() : (report?.output ?? "No report")}</span>
               </div>
               <div className="reportResult">
                 <div className="reportMetricRow">

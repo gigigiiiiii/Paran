@@ -39,6 +39,27 @@ Event persistence is written to Supabase (no local JSONL file write).
 - `SUPABASE_SNAPSHOT_BUCKET` (default: `collision-event-snaps`)
 - `SUPABASE_SNAPSHOT_PREFIX` (default: `events`)
 
+### LLM Configuration (Reports)
+
+- `REPORT_LLM_PROVIDER` (default: `api`; supported: `api`, `local`; legacy aliases: `gemini`, `qwen`)
+- `REPORT_LLM_USE_OLLAMA` (legacy fallback; `1/true` selects `local` when `REPORT_LLM_PROVIDER` is not set)
+- `REPORT_LLM_MODEL` (shared fallback model override)
+- `REPORT_GEMINI_MODEL` (default: `gemini-2.5-flash`)
+- `REPORT_OLLAMA_MODEL` (default: `qwen2.5:7b`; current local test model: `qwen2.5vl:3b`)
+- `REPORT_LLM_TEMPERATURE` (default: `0.2`)
+- `REPORT_OLLAMA_NUM_CTX` (default: `4096`)
+- `REPORT_OLLAMA_NUM_GPU` (default: `-1`; ask Ollama to offload as many layers as possible to GPU)
+- `REPORT_OLLAMA_TIMEOUT_SEC` (default: `120`)
+- `REPORT_OLLAMA_KEEP_ALIVE` (default: `5m`)
+- `OLLAMA_BASE_URL` (default: `http://localhost:11434`; used when `llm_provider=local`)
+
+**Local Setup (WiFi-independent):**
+1. Install Ollama: https://ollama.ai
+2. Pull a model: `ollama pull qwen2.5vl:3b` (or set `REPORT_OLLAMA_MODEL` to another installed Qwen model)
+3. Start Ollama server: `ollama serve` (runs on `http://localhost:11434`)
+4. Choose `Local` in the report UI, or set `REPORT_LLM_PROVIDER=local` in `.env`
+5. Check readiness: `GET /api/reports/llm/status?llm_provider=local`
+
 ## Supabase Table
 
 Create table `collision_events` (or set `SUPABASE_EVENT_TABLE`):
