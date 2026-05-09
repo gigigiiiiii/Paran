@@ -176,6 +176,9 @@ class MonitorService:
             args.depth_compare_interval = float(os.getenv("MONITOR_DEPTH_COMPARE_INTERVAL"))
         if os.getenv("MONITOR_MODEL_DEPTH_INTERVAL"):
             args.model_depth_interval = float(os.getenv("MONITOR_MODEL_DEPTH_INTERVAL"))
+        if os.getenv("MONITOR_VIDEO_DEPTH_SYNC"):
+            video_depth_sync = os.getenv("MONITOR_VIDEO_DEPTH_SYNC", "1").strip().lower()
+            args.video_depth_sync = video_depth_sync not in {"0", "false", "no", "off"}
         if os.getenv("MONITOR_DISTANCE_SMOOTH_ALPHA"):
             args.distance_smooth_alpha = float(os.getenv("MONITOR_DISTANCE_SMOOTH_ALPHA"))
         if os.getenv("MONITOR_DISPLAY_DISTANCE_SMOOTH_ALPHA"):
@@ -724,18 +727,19 @@ class MonitorService:
             self._enqueue_supabase_event(event_to_persist, encoded_bytes)
 
     def frame_generator(self):
+        last_frame = None
         while True:
             with self._lock:
                 frame = self._latest_frame_jpeg
-            if frame is None:
-                time.sleep(0.03)
+            if frame is None or frame is last_frame:
+                time.sleep(0.005)
                 continue
+            last_frame = frame
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n"
                 b"Cache-Control: no-cache\r\n\r\n" + frame + b"\r\n"
             )
-            time.sleep(0.03)
 
     # ── 상태 조회 ─────────────────────────────────────────────────────────────
 

@@ -45,6 +45,7 @@ class VideoRunner:
         self._dm_thread         = None
         self._dm_last_submit_ts = 0.0
         self._dm_interval_sec   = max(0.0, float(getattr(args, "model_depth_interval", 0.2)))
+        self._sync_depth        = bool(getattr(args, "video_depth_sync", False))
 
         depth_model_id = getattr(args, "depth_model", "none")
         if depth_model_id and depth_model_id.lower() != "none":
@@ -56,14 +57,21 @@ class VideoRunner:
             self._depth_scale     = 1.0
             self._make_intrinsics = make_intrinsics_from_fov
 
-            self._dm_thread = threading.Thread(
-                target=self._depth_worker, daemon=True, name="video-depth-worker"
-            )
-            self._dm_thread.start()
-            print(
-                f"[VideoRunner] Depth 모델 활성화 (백그라운드, "
-                f"간격={self._dm_interval_sec}s): {depth_model_id}"
-            )
+            if not self._sync_depth:
+                self._dm_thread = threading.Thread(
+                    target=self._depth_worker, daemon=True, name="video-depth-worker"
+                )
+                self._dm_thread.start()
+            if self._sync_depth:
+                print(
+                    f"[VideoRunner] Depth 모델 활성화 (동기, RGB-depth 프레임 일치): "
+                    f"{depth_model_id}"
+                )
+            else:
+                print(
+                    f"[VideoRunner] Depth 모델 활성화 (백그라운드, "
+                    f"간격={self._dm_interval_sec}s): {depth_model_id}"
+                )
         else:
             print("[VideoRunner] Depth 모델 없음 — 탐지+트래킹만 수행")
 
@@ -123,22 +131,51 @@ class VideoRunner:
                 print(f"[VideoRunner] 소스를 열 수 없습니다: {self._source}")
                 return
 
-            fps_src  = cap.get(cv2.CAP_PROP_FPS) or 30.0
-            interval = 1.0 / fps_src
+            fps_src = cap.get(cv2.CAP_PROP_FPS) or 30.0
             print(f"[VideoRunner] 소스: {self._source} | {fps_src:.0f}fps")
 
+            # ── 최신 프레임 버퍼 (Reader → Infer) ──────────────────────────
+            _buf_lock   = threading.Lock()
+            _latest_buf = [None]   # [frame | None]
+            _eof        = [False]
+
+            def _reader_thread():
+                interval = 1.0 / fps_src
+                while not self._stop:
+                    t0 = time.time()
+                    ret, frame = cap.read()
+                    if not ret:
+                        with _buf_lock:
+                            _eof[0] = True
+                        break
+                    with _buf_lock:
+                        _latest_buf[0] = frame   # 이전 미처리 프레임 덮어씀
+                    elapsed = time.time() - t0
+                    sleep_t = max(0.0, interval - elapsed)
+                    if sleep_t > 0:
+                        time.sleep(sleep_t)
+
+            reader = threading.Thread(target=_reader_thread, daemon=True, name="video-reader")
+            reader.start()
+
+            # ── 추론 루프 ───────────────────────────────────────────────────
             while not self._stop:
-                t0 = time.time()
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                with _buf_lock:
+                    frame = _latest_buf[0]
+                    _latest_buf[0] = None
+                    eof = _eof[0]
+
+                if frame is None:
+                    if eof:
+                        break
+                    time.sleep(0.005)
+                    continue
 
                 depth_image = None
                 intrinsics  = None
                 depth_scale = None
 
                 if self._depth_model is not None:
-                    # 첫 프레임에서 intrinsics 초기화
                     if self._pseudo_intrinsics is None:
                         h, w = frame.shape[:2]
                         self._pseudo_intrinsics = self._make_intrinsics(
@@ -146,13 +183,19 @@ class VideoRunner:
                         )
                         print(f"[VideoRunner] Intrinsics: {self._pseudo_intrinsics}")
 
-                    now_ts = time.time()
-                    with self._dm_lock:
-                        # _dm_interval_sec마다 한 번만 새 프레임 제출
-                        if now_ts - self._dm_last_submit_ts >= self._dm_interval_sec:
-                            self._dm_input_frame    = frame.copy()
-                            self._dm_last_submit_ts = now_ts
-                        depth_image = self._dm_latest_result
+                    if self._sync_depth:
+                        try:
+                            depth_image = self._depth_model.infer(frame)
+                        except Exception as exc:
+                            print(f"[VideoRunner] Sync depth inference error: {exc}")
+                            depth_image = None
+                    else:
+                        now_ts = time.time()
+                        with self._dm_lock:
+                            if now_ts - self._dm_last_submit_ts >= self._dm_interval_sec:
+                                self._dm_input_frame    = frame.copy()
+                                self._dm_last_submit_ts = now_ts
+                            depth_image = self._dm_latest_result
 
                     intrinsics  = self._pseudo_intrinsics
                     depth_scale = self._depth_scale
@@ -173,11 +216,7 @@ class VideoRunner:
                         self._stop = True
                         break
 
-                elapsed = time.time() - t0
-                sleep_t = max(0.0, interval - elapsed)
-                if sleep_t > 0:
-                    time.sleep(sleep_t)
-
+            reader.join(timeout=2.0)
             cap.release()
 
             if not self._loop or self._stop:

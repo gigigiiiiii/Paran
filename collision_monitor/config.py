@@ -127,12 +127,14 @@ def parse_args(argv=None):
                         help="Consecutive frames required to lower risk level")
     parser.add_argument("--score-alpha", type=float, default=0.85,
                         help="EMA alpha for risk score smoothing (0~1)")
-    parser.add_argument("--score-dist-weight", type=float, default=0.60,
+    parser.add_argument("--score-dist-weight", type=float, default=0.35,
                         help="Risk score weight for distance component")
-    parser.add_argument("--score-ttc-weight", type=float, default=0.30,
+    parser.add_argument("--score-ttc-weight", type=float, default=0.20,
                         help="Risk score weight for TTC component")
     parser.add_argument("--score-close-weight", type=float, default=0.10,
                         help="Risk score weight for relative closing speed component")
+    parser.add_argument("--score-cpa-weight", type=float, default=0.35,
+                        help="Risk score weight for closest-point-of-approach prediction")
     parser.add_argument("--score-close-ref", type=float, default=1.2,
                         help="Closing speed (m/s) that maps close-score to 1.0")
     parser.add_argument("--score-warn-on", type=float, default=0.40,
@@ -150,6 +152,16 @@ def parse_args(argv=None):
         choices=["forward", "los", "both_min"],
         help="TTC calculation mode: forward / los / both_min",
     )
+    parser.add_argument("--prediction-horizon", type=float, default=3.0,
+                        help="CPA prediction horizon in seconds")
+    parser.add_argument("--person-radius", type=float, default=0.35,
+                        help="Person collision radius in meters for CPA")
+    parser.add_argument("--obstacle-radius-min", type=float, default=0.35,
+                        help="Minimum obstacle collision radius in meters for CPA")
+    parser.add_argument("--safety-margin", type=float, default=0.30,
+                        help="Additional safety margin in meters for CPA")
+    parser.add_argument("--track-velocity-window", type=int, default=8,
+                        help="Recent per-track positions used for regression velocity")
 
     # ── 모노큘러 Depth 모델 (RealSense 없이 depth 추정) ─────────────────────
     parser.add_argument(
@@ -166,6 +178,22 @@ def parse_args(argv=None):
         dest="model_depth_interval",
         help="RealSense 없이 모델 depth를 실제 거리로 쓸 때 추론 간격(초). 0=가능한 매 프레임",
     )
+    parser.add_argument(
+        "--async-video-depth",
+        action="store_false",
+        dest="video_depth_sync",
+        help=(
+            "영상/웹캠 테스트 모드에서 depth 모델을 백그라운드 비동기로 실행한다. "
+            "기본값은 정확도를 위해 현재 RGB 프레임과 같은 프레임의 depth를 동기 추론한다."
+        ),
+    )
+    parser.add_argument(
+        "--sync-video-depth",
+        action="store_true",
+        dest="video_depth_sync",
+        help="Run video/webcam depth inference synchronously on every processed frame for RGB-depth alignment.",
+    )
+    parser.set_defaults(video_depth_sync=False)
     parser.add_argument(
         "--depth-model",
         type=str,

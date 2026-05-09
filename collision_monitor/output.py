@@ -51,6 +51,7 @@ def maybe_open_log(log_path):
         writer.writerow([
             "ts_epoch", "risk", "min_distance_m", "ttc_s",
             "person_track_id", "obstacle_track_id", "obstacle_name", "angle_deg",
+            "t_cpa_s", "d_cpa_m", "collision_predicted", "velocity_confidence", "cpa_score",
         ])
         log_f.flush()
     return log_f, writer
@@ -68,4 +69,3 @@ def maybe_beep(enabled, level, now_ts, last_beep_ts, cooldown):
         winsound.Beep(1200, 90)
         return now_ts
     return last_beep_ts
-

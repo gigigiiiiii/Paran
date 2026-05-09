@@ -40,21 +40,6 @@ def draw_detections(
         cv2.putText(canvas, label,
                     (x1, max(20, y1 - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
-        rs_z = p.get("z")
-        if rs_z is not None:
-            cv2.putText(canvas, f"rs:{rs_z:.2f}m",
-                        (x1, max(36, y1 + 8)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 200, 0), 2)
-        model_z = p.get("model_z")
-        if model_z is not None:
-            model_label = f"depth:{model_z:.2f}m"
-            if rs_z is not None:
-                err = model_z - rs_z
-                rel = err / rs_z * 100.0
-                model_label += f"  err:{err:+.2f}m/{rel:+.0f}%"
-            cv2.putText(canvas, model_label,
-                        (x1, max(52, y1 + 24)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 220), 2)
 
     for o in obstacles:
         x1, y1, x2, y2 = o["bbox"]
@@ -67,21 +52,6 @@ def draw_detections(
         cv2.putText(canvas, label,
                     (x1, max(20, y1 - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
-        rs_z = o.get("z")
-        if rs_z is not None:
-            cv2.putText(canvas, f"rs:{rs_z:.2f}m",
-                        (x1, max(36, y1 + 8)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 200, 0), 2)
-        model_z = o.get("model_z")
-        if model_z is not None:
-            model_label = f"depth:{model_z:.2f}m"
-            if rs_z is not None:
-                err = model_z - rs_z
-                rel = err / rs_z * 100.0
-                model_label += f"  err:{err:+.2f}m/{rel:+.0f}%"
-            cv2.putText(canvas, model_label,
-                        (x1, max(52, y1 + 24)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 220), 2)
 
     for pair in all_risk_pairs:
         if line_max_dist > 0.0 and pair.get("dist") is not None:

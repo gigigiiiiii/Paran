@@ -59,6 +59,82 @@ def closing_speed_score(closing_speed, ref_speed=1.2):
     return _clip01(float(closing_speed) / ref)
 
 
+def _xz(vec):
+    return np.array([float(vec[0]), float(vec[2])], dtype=np.float32)
+
+
+def cpa_metrics(
+    person,
+    obs,
+    prediction_horizon_s=3.0,
+    person_radius_m=0.35,
+    obstacle_radius_m=None,
+    obstacle_radius_min_m=0.35,
+    safety_margin_m=0.30,
+):
+    p_pt = person.get("point_3d")
+    o_pt = obs.get("point_3d")
+    if p_pt is None or o_pt is None:
+        return {
+            "t_cpa_s": None,
+            "d_cpa_m": None,
+            "collision_predicted": False,
+            "safety_radius_m": None,
+        }
+
+    p_vel = person.get("velocity")
+    o_vel = obs.get("velocity")
+    if p_vel is None:
+        p_vel = np.zeros(3, dtype=np.float32)
+    if o_vel is None:
+        o_vel = np.zeros(3, dtype=np.float32)
+
+    rel_pos = _xz(o_pt) - _xz(p_pt)
+    rel_vel = _xz(o_vel) - _xz(p_vel)
+    rel_speed_sq = float(np.dot(rel_vel, rel_vel))
+    if rel_speed_sq < 1e-8:
+        t_cpa = 0.0
+    else:
+        t_cpa = -float(np.dot(rel_pos, rel_vel)) / rel_speed_sq
+
+    closest = rel_pos + rel_vel * max(0.0, t_cpa)
+    d_cpa = float(np.linalg.norm(closest))
+    horizon = max(0.0, float(prediction_horizon_s))
+    obs_radius = obstacle_radius_m
+    if obs_radius is None:
+        obs_radius = obs.get("obstacle_radius_m")
+    obs_radius = max(float(obstacle_radius_min_m), float(obs_radius or 0.0))
+    safety_radius = max(0.0, float(person_radius_m)) + obs_radius + max(0.0, float(safety_margin_m))
+    collision_predicted = bool(0.0 < t_cpa <= horizon and d_cpa <= safety_radius)
+    return {
+        "t_cpa_s": float(t_cpa),
+        "d_cpa_m": d_cpa,
+        "collision_predicted": collision_predicted,
+        "safety_radius_m": safety_radius,
+    }
+
+
+def cpa_score(metrics, prediction_horizon_s=3.0):
+    t_cpa = metrics.get("t_cpa_s") if metrics else None
+    d_cpa = metrics.get("d_cpa_m") if metrics else None
+    safety_radius = metrics.get("safety_radius_m") if metrics else None
+    if t_cpa is None or d_cpa is None or safety_radius is None:
+        return 0.0
+    horizon = max(1e-3, float(prediction_horizon_s))
+    if t_cpa <= 0.0 or t_cpa > horizon:
+        return 0.0
+    safety_radius = max(1e-3, float(safety_radius))
+    warning_radius = safety_radius + 0.75
+    if d_cpa <= safety_radius:
+        spatial_score = 1.0
+    elif d_cpa >= warning_radius:
+        spatial_score = 0.0
+    else:
+        spatial_score = ((warning_radius - float(d_cpa)) / (warning_radius - safety_radius)) ** 2
+    time_score = 1.0 - 0.5 * _clip01(float(t_cpa) / horizon)
+    return _clip01(spatial_score * time_score)
+
+
 def compute_risk_score(
     min_distance,
     ttc,
@@ -67,32 +143,42 @@ def compute_risk_score(
     danger_dist,
     warn_ttc,
     danger_ttc,
-    dist_weight=0.5,
-    ttc_weight=0.35,
-    close_weight=0.15,
+    dist_weight=0.35,
+    ttc_weight=0.20,
+    close_weight=0.10,
+    cpa_score_value=0.0,
+    cpa_confidence=0.0,
+    cpa_weight=0.35,
     close_ref=1.2,
 ):
     s_dist = distance_score(min_distance, warn_dist=warn_dist, danger_dist=danger_dist)
     s_ttc = ttc_score(ttc, warn_ttc=warn_ttc, danger_ttc=danger_ttc)
     s_close = closing_speed_score(closing_speed, ref_speed=close_ref)
+    s_cpa = _clip01(cpa_score_value)
 
     wd = max(0.0, float(dist_weight))
     wt = max(0.0, float(ttc_weight))
     wc = max(0.0, float(close_weight))
-    total = wd + wt + wc
+    wcpa_base = max(0.0, float(cpa_weight))
+    cpa_conf = _clip01(cpa_confidence)
+    wcpa = wcpa_base * cpa_conf
+    wd += wcpa_base - wcpa
+    total = wd + wt + wc + wcpa
     if total < 1e-6:
-        wd, wt, wc = 0.5, 0.5, 0.0
+        wd, wt, wc, wcpa = 0.5, 0.5, 0.0, 0.0
     else:
-        wd, wt, wc = wd / total, wt / total, wc / total
+        wd, wt, wc, wcpa = wd / total, wt / total, wc / total, wcpa / total
 
-    score = _clip01(wd * s_dist + wt * s_ttc + wc * s_close)
+    score = _clip01(wd * s_dist + wt * s_ttc + wc * s_close + wcpa * s_cpa)
     return score, {
         "distance": s_dist,
         "ttc": s_ttc,
         "closing": s_close,
+        "cpa": s_cpa,
         "w_dist": wd,
         "w_ttc": wt,
         "w_close": wc,
+        "w_cpa": wcpa,
     }
 
 

@@ -24,6 +24,8 @@ from .visualizer import draw_detections, draw_hud_panel
 from .risk import (
     closing_speed_los,
     signed_closing_speed_los,
+    cpa_metrics,
+    cpa_score,
     compute_risk_score,
     risk_color,
     score_to_level,
@@ -52,6 +54,7 @@ class FrameProcessor:
         self.score_dist_weight = max(0.0, float(args.score_dist_weight))
         self.score_ttc_weight  = max(0.0, float(args.score_ttc_weight))
         self.score_close_weight= max(0.0, float(args.score_close_weight))
+        self.score_cpa_weight  = max(0.0, float(getattr(args, "score_cpa_weight", 0.35)))
         self.score_close_ref   = max(1e-3, float(args.score_close_ref))
         self.score_warn_on     = float(np.clip(args.score_warn_on, 0.0, 1.0))
         self.score_danger_on   = max(self.score_warn_on,
@@ -78,6 +81,11 @@ class FrameProcessor:
         self.receding_speed_threshold = max(0.0, float(getattr(args, "receding_speed_threshold", 0.15)))
         self.receding_risk_scale = float(np.clip(getattr(args, "receding_risk_scale", 0.65), 0.0, 1.0))
         self.confidence_risk_floor = float(np.clip(getattr(args, "confidence_risk_floor", 0.65), 0.0, 1.0))
+        self.prediction_horizon_s = max(0.0, float(getattr(args, "prediction_horizon", 3.0)))
+        self.person_radius_m = max(0.0, float(getattr(args, "person_radius", 0.35)))
+        self.obstacle_radius_min_m = max(0.0, float(getattr(args, "obstacle_radius_min", 0.35)))
+        self.safety_margin_m = max(0.0, float(getattr(args, "safety_margin", 0.30)))
+        self.track_velocity_window = max(2, int(getattr(args, "track_velocity_window", 8)))
         self.person_grid_x   = max(1, int(args.person_grid_x))
         self.person_grid_y   = max(1, int(args.person_grid_y))
         self.obstacle_grid_x = max(1, int(args.obstacle_grid_x))
@@ -155,6 +163,8 @@ class FrameProcessor:
         self.next_obstacle_track_id  = 1
         self.vel_ema_person   : dict = {}
         self.vel_ema_obstacle : dict = {}
+        self.point_history_person   : dict = {}
+        self.point_history_obstacle : dict = {}
 
         # ── 위험도 상태 ───────────────────────────────────────────────────────
         self.stable_level      = "SAFE"
@@ -269,6 +279,8 @@ class FrameProcessor:
         self.next_obstacle_track_id = 1
         self.vel_ema_person   = {}
         self.vel_ema_obstacle = {}
+        self.point_history_person = {}
+        self.point_history_obstacle = {}
         self.lock_pairs.clear()
         self.line_uv_smooth.clear()
         self.pair_dist_smooth.clear()
@@ -279,6 +291,77 @@ class FrameProcessor:
             self.log_file.close()
 
     # ── 핵심 처리 ─────────────────────────────────────────────────────────────
+
+    def _regression_velocity(self, history):
+        if len(history) < 3:
+            return None, 0.0
+        ts = np.array([x[0] for x in history], dtype=np.float32)
+        pts = np.array([x[1] for x in history], dtype=np.float32)
+        ts = ts - ts[-1]
+        duration = float(ts[-1] - ts[0])
+        if duration < 1e-3:
+            return None, 0.0
+        var_t = float(np.var(ts))
+        if var_t < 1e-8:
+            return None, 0.0
+
+        ts_centered = ts - float(np.mean(ts))
+        denom = float(np.sum(ts_centered ** 2))
+        if denom < 1e-8:
+            return None, 0.0
+        vx = float(np.sum(ts_centered * (pts[:, 0] - float(np.mean(pts[:, 0])))) / denom)
+        vz = float(np.sum(ts_centered * (pts[:, 2] - float(np.mean(pts[:, 2])))) / denom)
+        vy = float((pts[-1, 1] - pts[0, 1]) / duration)
+        vel = np.array([vx, vy, vz], dtype=np.float32)
+
+        pred_x = vx * ts + float(np.mean(pts[:, 0]) - vx * np.mean(ts))
+        pred_z = vz * ts + float(np.mean(pts[:, 2]) - vz * np.mean(ts))
+        residual = np.sqrt((pts[:, 0] - pred_x) ** 2 + (pts[:, 2] - pred_z) ** 2)
+        residual_std = float(np.std(residual))
+        count_conf = min(1.0, len(history) / float(self.track_velocity_window))
+        duration_conf = min(1.0, duration / 0.35)
+        stability_conf = float(1.0 / (1.0 + residual_std * 6.0))
+        confidence = float(np.clip(
+            0.45 * count_conf + 0.25 * duration_conf + 0.30 * stability_conf,
+            0.0, 1.0
+        ))
+        return vel, confidence
+
+    def _estimate_track_velocity(self, item, histories, prev_points, ema_store, now, dt, alpha):
+        tid = item.get("track_id")
+        item["velocity_confidence"] = 0.0
+        if tid is None:
+            return
+        tid = int(tid)
+        point = np.asarray(item["point_3d"], dtype=np.float32)
+        history = histories.setdefault(tid, deque(maxlen=self.track_velocity_window))
+        history.append((float(now), point.copy()))
+
+        v_reg, reg_conf = self._regression_velocity(history)
+        prev_pt = prev_points.get(tid)
+        v_fallback = ema_store.get(tid)
+        fallback_conf = 0.15 if v_fallback is not None else 0.0
+        if prev_pt is not None:
+            v_raw = (point - prev_pt) / dt
+            v_fallback = v_raw if v_fallback is None else (alpha * v_fallback + (1.0 - alpha) * v_raw)
+            fallback_conf = max(fallback_conf, 0.35)
+
+        if v_reg is not None and reg_conf >= 0.45:
+            v_s = v_reg
+            confidence = reg_conf
+        elif v_fallback is not None:
+            v_s = v_fallback
+            confidence = max(fallback_conf, reg_conf * 0.7)
+        else:
+            v_s = None
+            confidence = 0.0
+
+        if v_s is not None and float(np.linalg.norm(v_s)) < 0.08:
+            v_s = np.zeros(3, dtype=np.float32)
+        if v_s is not None:
+            ema_store[tid] = v_s
+        item["velocity"] = v_s
+        item["velocity_confidence"] = float(np.clip(confidence, 0.0, 1.0))
 
     def process(
         self,
@@ -351,6 +434,10 @@ class FrameProcessor:
                 name = PERSON_CLASS_NAME
             x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].cpu().numpy()]
             det_bbox = (x1, y1, x2, y2)
+            if name in OBSTACLE_CLASSES_DEFAULT:
+                x1, y1, x2, y2 = self._expand_vehicle_bbox(
+                    (x1, y1, x2, y2), frame_w, frame_h
+                )
             box_w = max(0, x2 - x1)
             box_h = max(0, y2 - y1)
             area_ratio = (box_w * box_h) / frame_area
@@ -363,6 +450,8 @@ class FrameProcessor:
             model_z = None
             point_3d = None
             collision_samples = []
+            width_m = None
+            height_m = None
 
             if has_depth:
                 from .depth import (depth_median_around_uv,
@@ -479,11 +568,15 @@ class FrameProcessor:
                 "conf"             : conf,
                 "z"                : z,
                 "model_z"          : model_z,
+                "width_m"          : width_m,
+                "height_m"         : height_m,
+                "obstacle_radius_m": max(self.obstacle_radius_min_m, float(width_m) * 0.5) if width_m is not None else self.obstacle_radius_min_m,
                 "point_3d"         : point_3d,
                 "rep_uv"           : (u, v),
                 "track_id"         : track_id,
                 "is_fixed"         : name in self.fixed_classes,
                 "velocity"         : None,
+                "velocity_confidence": 0.0,
                 "collision_samples": collision_samples,
             }
 
@@ -525,41 +618,23 @@ class FrameProcessor:
         if has_depth:
             alpha = float(np.clip(args.vel_alpha, 0.0, 0.99))
             for p in people:
-                tid = p.get("track_id")
-                if tid is None:
-                    continue
-                prev_pt = self.prev_person_points.get(tid)
-                if prev_pt is not None:
-                    v_raw  = (p["point_3d"] - prev_pt) / dt
-                    v_prev = self.vel_ema_person.get(tid)
-                    v_s    = v_raw if v_prev is None else (alpha * v_prev + (1.0 - alpha) * v_raw)
-                    # depth 노이즈로 인한 미세 떨림 제거: 0.08m/s 미만은 정지로 처리
-                    if float(np.linalg.norm(v_s)) < 0.08:
-                        v_s = np.zeros(3, dtype=np.float32)
-                    self.vel_ema_person[tid] = v_s
-                    p["velocity"] = v_s
-                else:
-                    p["velocity"] = self.vel_ema_person.get(tid)
-
+                self._estimate_track_velocity(
+                    p, self.point_history_person, self.prev_person_points,
+                    self.vel_ema_person, now, dt, alpha
+                )
             for o in obstacles:
                 tid = o.get("track_id")
                 if tid is None:
                     continue
                 if o.get("is_fixed"):
-                    self.vel_ema_obstacle[tid] = np.zeros(3, dtype=np.float32)
+                    self.vel_ema_obstacle[int(tid)] = np.zeros(3, dtype=np.float32)
                     o["velocity"] = np.zeros(3, dtype=np.float32)
-                    continue
-                prev_pt = self.prev_obstacle_points.get(tid)
-                if prev_pt is not None:
-                    v_raw  = (o["point_3d"] - prev_pt) / dt
-                    v_prev = self.vel_ema_obstacle.get(tid)
-                    v_s    = v_raw if v_prev is None else (alpha * v_prev + (1.0 - alpha) * v_raw)
-                    if float(np.linalg.norm(v_s)) < 0.08:
-                        v_s = np.zeros(3, dtype=np.float32)
-                    self.vel_ema_obstacle[tid] = v_s
-                    o["velocity"] = v_s
+                    o["velocity_confidence"] = 1.0
                 else:
-                    o["velocity"] = self.vel_ema_obstacle.get(tid)
+                    self._estimate_track_velocity(
+                        o, self.point_history_obstacle, self.prev_obstacle_points,
+                        self.vel_ema_obstacle, now, dt, alpha
+                    )
 
         # ── 거리·TTC·위험도 계산 (모든 사람-장비 쌍, 쌍별 lock 적용) ───────────
         min_distance  = None
@@ -568,6 +643,7 @@ class FrameProcessor:
         nearest_pair  = None
         rep_distance  = None
         selected_pair_score = None
+        selected_risk_pair = None
         all_risk_pairs: list[dict] = []
 
         if has_depth and people and obstacles:
@@ -613,13 +689,31 @@ class FrameProcessor:
                     else:
                         dist = raw_dist
                     self.pair_dist_smooth[pair_key] = float(dist)
+                    proximity_dist = min(float(dist), float(raw_dist))
 
                     fwd = person["velocity"]
                     person_moving = fwd is not None and float(np.linalg.norm(fwd)) >= 0.08
                     obs_pt = os_["point_3d"] if os_ else obs["point_3d"]
                     _fwd_for_angle = fwd if person_moving else np.array([0.0, 0.0, 1.0], dtype=np.float32)
                     angle = angle_from_forward_vector(_fwd_for_angle, person["point_3d"], obs_pt)
-                    if person_moving and angle > args.front_angle:
+                    cpa_m = cpa_metrics(
+                        person, obs,
+                        prediction_horizon_s=self.prediction_horizon_s,
+                        person_radius_m=self.person_radius_m,
+                        obstacle_radius_min_m=self.obstacle_radius_min_m,
+                        safety_margin_m=self.safety_margin_m,
+                    )
+                    pair_cpa_score = cpa_score(cpa_m, prediction_horizon_s=self.prediction_horizon_s)
+                    velocity_confidence = float(np.clip(
+                        min(person.get("velocity_confidence", 0.0), obs.get("velocity_confidence", 0.0)),
+                        0.0, 1.0
+                    ))
+                    if (
+                        person_moving
+                        and angle > args.front_angle
+                        and not cpa_m["collision_predicted"]
+                        and proximity_dist > args.warn_dist
+                    ):
                         self.lock_pairs.pop(pair_key, None)
                         self.pair_dist_smooth.pop(pair_key, None)
                         self.line_uv_smooth.pop(pair_key, None)
@@ -657,6 +751,9 @@ class FrameProcessor:
                         dist_weight=self.score_dist_weight,
                         ttc_weight=self.score_ttc_weight,
                         close_weight=self.score_close_weight,
+                        cpa_score_value=pair_cpa_score,
+                        cpa_confidence=velocity_confidence,
+                        cpa_weight=self.score_cpa_weight,
                         close_ref=self.score_close_ref,
                     )
                     is_receding = (
@@ -679,10 +776,23 @@ class FrameProcessor:
                     sample_conf = 0.6 * count_conf + 0.4 * depth_conf
                     det_conf = float(np.clip(min(person.get("conf", 1.0), obs.get("conf", 1.0)), 0.0, 1.0))
                     pair_conf = float(np.clip(0.65 * sample_conf + 0.35 * det_conf, 0.0, 1.0))
-                    if is_receding:
+                    if is_receding and not cpa_m["collision_predicted"]:
                         pair_score *= self.receding_risk_scale
                         pair_ttc = None
                     pair_score *= self.confidence_risk_floor + (1.0 - self.confidence_risk_floor) * pair_conf
+                    if proximity_dist <= args.danger_dist:
+                        pair_score = max(pair_score, self.score_danger_on)
+                    elif proximity_dist <= args.warn_dist:
+                        span = max(1e-6, float(args.warn_dist) - float(args.danger_dist))
+                        proximity_ratio = float(np.clip(
+                            (float(args.warn_dist) - proximity_dist) / span,
+                            0.0, 1.0,
+                        ))
+                        proximity_floor = (
+                            self.score_warn_on
+                            + proximity_ratio * (self.score_danger_on - self.score_warn_on)
+                        )
+                        pair_score = max(pair_score, proximity_floor)
                     pair_score = float(np.clip(pair_score, 0.0, 1.0))
                     display_dist = float(dist)
                     prev_display_dist = self.display_dist_smooth.get(pair_key)
@@ -722,6 +832,10 @@ class FrameProcessor:
                         "closing_speed": pair_cs, "signed_closing_speed": signed_pair_cs,
                         "score": pair_score, "level": pair_level,
                         "pair_confidence": pair_conf, "is_receding": is_receding,
+                        "t_cpa_s": cpa_m["t_cpa_s"], "d_cpa_m": cpa_m["d_cpa_m"],
+                        "collision_predicted": cpa_m["collision_predicted"],
+                        "velocity_confidence": velocity_confidence,
+                        "cpa_score": pair_cpa_score,
                         "angle": angle, "fwd": fwd, "ps": ps, "os_": os_,
                         "display_ps_uv": display_ps_uv, "display_os_uv": display_os_uv,
                     })
@@ -744,6 +858,7 @@ class FrameProcessor:
                 ttc          = top["ttc"]
                 closing_speed = top["closing_speed"]
                 selected_pair_score = top["score"]
+                selected_risk_pair = top
                 rep_distance = float(top["dist"])
                 nearest_pair = (
                     top["person"], top["obs"], top["angle"],
@@ -769,13 +884,26 @@ class FrameProcessor:
                 self.score_alpha * self.risk_score_smooth
                 + (1.0 - self.score_alpha) * self.risk_score_raw
             )
-            score_level = score_to_level(
+            smooth_level = score_to_level(
                 score=self.risk_score_smooth,
                 stable_level=self.stable_level,
                 warn_on=self.score_warn_on,   danger_on=self.score_danger_on,
                 warn_off=self.score_warn_off, danger_off=self.score_danger_off,
             )
-            level = self._stabilize_level(score_level)
+            raw_level = score_to_level(
+                score=self.risk_score_raw,
+                stable_level=self.stable_level,
+                warn_on=self.score_warn_on,   danger_on=self.score_danger_on,
+                warn_off=self.score_warn_off, danger_off=self.score_danger_off,
+            )
+            score_level = raw_level if self._risk_rank(raw_level) > self._risk_rank(smooth_level) else smooth_level
+            if raw_level == "DANGER":
+                self.stable_level = "DANGER"
+                self._pending_level = None
+                self._pending_count = 0
+                level = "DANGER"
+            else:
+                level = self._stabilize_level(score_level)
         else:
             self.risk_score_raw    = 0.0
             self.risk_score_smooth = 0.0
@@ -840,7 +968,7 @@ class FrameProcessor:
         )
         if self.log_writer is not None:
             if nearest_pair is None:
-                self.log_writer.writerow([f"{now:.3f}", level, "", "", "", "", "", ""])
+                self.log_writer.writerow([f"{now:.3f}", level, "", "", "", "", "", "", "", "", "", "", ""])
             else:
                 person, obs, angle, _, _, _ = nearest_pair
                 self.log_writer.writerow([
@@ -849,6 +977,11 @@ class FrameProcessor:
                     f"{ttc:.3f}"          if ttc          else "",
                     person["track_id"], obs["track_id"], obs["name"],
                     f"{angle:.2f}",
+                    f"{selected_risk_pair['t_cpa_s']:.3f}" if selected_risk_pair and selected_risk_pair.get("t_cpa_s") is not None else "",
+                    f"{selected_risk_pair['d_cpa_m']:.3f}" if selected_risk_pair and selected_risk_pair.get("d_cpa_m") is not None else "",
+                    int(bool(selected_risk_pair.get("collision_predicted"))) if selected_risk_pair else "",
+                    f"{selected_risk_pair['velocity_confidence']:.3f}" if selected_risk_pair else "",
+                    f"{selected_risk_pair['cpa_score']:.3f}" if selected_risk_pair else "",
                 ])
             self._log_flush_counter += 1
             if self._log_flush_counter >= self._log_flush_interval:
@@ -869,6 +1002,11 @@ class FrameProcessor:
             "min_distance_m"   : float(min_distance)  if min_distance  is not None else None,
             "rep_distance_m"   : float(rep_distance)  if rep_distance  is not None else None,
             "ttc_s"            : float(ttc)            if ttc            is not None else None,
+            "t_cpa_s"          : float(selected_risk_pair["t_cpa_s"]) if selected_risk_pair and selected_risk_pair.get("t_cpa_s") is not None else None,
+            "d_cpa_m"          : float(selected_risk_pair["d_cpa_m"]) if selected_risk_pair and selected_risk_pair.get("d_cpa_m") is not None else None,
+            "collision_predicted": bool(selected_risk_pair.get("collision_predicted")) if selected_risk_pair else False,
+            "velocity_confidence": float(selected_risk_pair.get("velocity_confidence", 0.0)) if selected_risk_pair else None,
+            "cpa_score"        : float(selected_risk_pair.get("cpa_score", 0.0)) if selected_risk_pair else None,
             "person_track_id"  : int(nearest_pair[0]["track_id"]) if nearest_pair else None,
             "obstacle_track_id": int(nearest_pair[1]["track_id"]) if nearest_pair else None,
             "obstacle_name"    : nearest_pair[1]["name"]           if nearest_pair else None,
