@@ -27,6 +27,8 @@ class ValidatedEvent(BaseModel):
     obstacle_name: str | None = None
     rep_distance_m: float | None = None
     ttc_s: float | None = None
+    snapshot_path: str | None = None
+    snapshot_url: str | None = None
 
 
 class Chain1Output(BaseModel):

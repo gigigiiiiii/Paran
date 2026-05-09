@@ -175,8 +175,13 @@ def _normalize_key_cases(llm_cases: list[Any], fallback_cases: list[dict[str, An
         if not isinstance(item, dict):
             continue
         event_id = str(item.get("event_id")) if item.get("event_id") is not None else ""
-        merged = dict(fallback_by_id.get(event_id, {}))
+        fallback = fallback_by_id.get(event_id, {})
+        merged = dict(fallback)
         merged.update(item)
+        if not merged.get("snapshot_url"):
+            merged["snapshot_url"] = fallback.get("snapshot_url")
+        if not merged.get("snapshot_path"):
+            merged["snapshot_path"] = fallback.get("snapshot_path")
         if "why_key" not in merged or not str(merged["why_key"]).strip():
             merged["why_key"] = merged.get("judgement_reason") or "Selected as a key safety case."
         normalized.append(merged)

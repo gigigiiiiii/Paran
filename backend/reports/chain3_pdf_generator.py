@@ -322,11 +322,15 @@ def _preserve_case_evidence(
     return merged_cases
 
 
-def _snapshot_flowables(key_cases: list[Any], styles: Any, image_cls: Any) -> list[Any]:
+def _snapshot_flowables(key_cases: list[Any], styles: Any, image_cls: Any, max_snapshots: int = 10) -> list[Any]:
+    from reportlab.platypus import Paragraph, Spacer
+
     flowables = []
     added = 0
     for case in key_cases:
         if not isinstance(case, dict):
+            continue
+        if str(case.get("risk_level") or "").strip() != "High":
             continue
         snapshot_url = str(case.get("snapshot_url") or "").strip()
         if not snapshot_url:
@@ -335,7 +339,7 @@ def _snapshot_flowables(key_cases: list[Any], styles: Any, image_cls: Any) -> li
         if image_bytes is None:
             continue
         caption = (
-            f"{case.get('event_time', '-')} / {case.get('risk_level', '-')} / "
+            f"{case.get('event_time', '-')} / DANGER / "
             f"{case.get('obstacle_name', '-')}"
         )
         image = image_cls(BytesIO(image_bytes), width=260, height=146)
@@ -345,7 +349,7 @@ def _snapshot_flowables(key_cases: list[Any], styles: Any, image_cls: Any) -> li
             Spacer(1, 8),
         ])
         added += 1
-        if added >= 4:
+        if added >= max_snapshots:
             break
     return flowables
 

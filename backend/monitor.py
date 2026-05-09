@@ -202,6 +202,19 @@ class MonitorService:
 
         return args
 
+    def _apply_mode_model(self, args, is_live: bool) -> None:
+        _project_root = Path(__file__).resolve().parent.parent
+        if is_live:
+            live_model_env = os.getenv("MONITOR_LIVE_MODEL", "").strip()
+            if live_model_env:
+                _m = Path(live_model_env)
+                args.model = str(_m if _m.is_absolute() else _project_root / _m)
+        else:
+            test_model_env = os.getenv("MONITOR_TEST_MODEL", "").strip()
+            if test_model_env:
+                _m = Path(test_model_env)
+                args.model = str(_m if _m.is_absolute() else _project_root / _m)
+
     # ── 러너 생명주기 ─────────────────────────────────────────────────────────
 
     def start(self):
@@ -214,11 +227,14 @@ class MonitorService:
             self._current_mode = f"test:{Path(video_source).name}" if video_source else "live"
         try:
             if video_source:
-                print(f"[INFO] VideoRunner 모드: {video_source}")
+                self._apply_mode_model(args, is_live=False)
+                print(f"[INFO] VideoRunner 모드: {video_source} / 모델: {args.model}")
                 args.video_source = video_source
                 args.video_loop   = True
                 self._runner = VideoRunner(args, display=False, on_result=self._on_runner_result)
             else:
+                self._apply_mode_model(args, is_live=True)
+                print(f"[INFO] PipelineRunner(RealSense) / 모델: {args.model}")
                 self._runner = PipelineRunner(args, display=False, on_result=self._on_runner_result)
         except Exception as exc:
             self._start_error = str(exc)
@@ -287,12 +303,14 @@ class MonitorService:
 
         try:
             if source:
-                print(f"[INFO] VideoRunner 전환: {source}")
+                self._apply_mode_model(args, is_live=False)
+                print(f"[INFO] VideoRunner 전환: {source} / 모델: {args.model}")
                 args.video_source = source
                 args.video_loop   = True
                 self._runner = VideoRunner(args, display=False, on_result=self._on_runner_result)
             else:
-                print("[INFO] PipelineRunner(RealSense) 전환")
+                self._apply_mode_model(args, is_live=True)
+                print(f"[INFO] PipelineRunner(RealSense) 전환 / 모델: {args.model}")
                 self._runner = PipelineRunner(args, display=False, on_result=self._on_runner_result)
         except Exception as exc:
             with self._lock:
