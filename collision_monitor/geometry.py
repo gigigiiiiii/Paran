@@ -87,6 +87,24 @@ def bbox_surface_points(bbox, grid_x=3, grid_y=3):
     return points
 
 
+def bbox_side_bottom_points(bbox):
+    x1, y1, x2, y2 = bbox
+    box_w = max(1, x2 - x1)
+    box_h = max(1, y2 - y1)
+    points = []
+    used = set()
+    for fx in (0.15, 0.5, 0.85):
+        for fy in (0.60, 0.80, 0.92):
+            u = int(round(x1 + fx * box_w))
+            v = int(round(y1 + fy * box_h))
+            key = (u, v)
+            if key in used:
+                continue
+            used.add(key)
+            points.append(key)
+    return points
+
+
 def build_collision_samples(
     depth_image,
     bbox,
@@ -110,7 +128,7 @@ def build_collision_samples(
     model_depth_weight = float(np.clip(model_depth_weight, 0.0, 1.0))
     model_depth_scale_factor = float(model_depth_scale_factor)
     sample_uvs = bbox_grid_points(bbox, grid_x=grid_x, grid_y=grid_y)
-    sample_uvs.extend(bbox_surface_points(bbox, grid_x=grid_x, grid_y=grid_y))
+    sample_uvs.extend(bbox_side_bottom_points(bbox))
     for u, v in sample_uvs:
         z_med = depth_median_around_uv(depth_image, u, v, depth_scale, win=win)
         z_near = depth_near_around_uv(

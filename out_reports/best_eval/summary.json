@@ -1,0 +1,106 @@
+{
+  "video": "test_videos\\KakaoTalk_20260509_190512638.mp4",
+  "model": "best.pt",
+  "frames_expected": 4688,
+  "frames_processed": 4688,
+  "source_fps": 24.0,
+  "imgsz": 1280,
+  "inference_conf_threshold_for_ap": 0.001,
+  "confidence_threshold_for_precision_recall": 0.35,
+  "yolo_nms_iou": 0.45,
+  "average_inference_fps": 14.748298427612642,
+  "inference_time_s": 317.8671778991702,
+  "metrics": {
+    "iou_threshold": 0.5,
+    "precision_recall_conf_threshold": 0.35,
+    "precision": 0.6029645963493814,
+    "recall": 0.4158675172151578,
+    "mAP@0.5": 0.29200863763142015,
+    "tp": 9844,
+    "fp": 6482,
+    "fn": 13827,
+    "per_class": {
+      "person": {
+        "gt": 14808,
+        "pred": 11413,
+        "tp": 6285,
+        "fp": 5128,
+        "fn": 8523,
+        "precision": 0.5506878121440463,
+        "recall": 0.4244327390599676,
+        "AP@0.5": 0.4304894782031976
+      },
+      "bicycle": {
+        "gt": 1,
+        "pred": 6,
+        "tp": 0,
+        "fp": 6,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "AP@0.5": 0.0
+      },
+      "motorbike": {
+        "gt": 0,
+        "pred": 453,
+        "tp": 0,
+        "fp": 453,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "AP@0.5": null
+      },
+      "car": {
+        "gt": 6635,
+        "pred": 4333,
+        "tp": 3559,
+        "fp": 774,
+        "fn": 3076,
+        "precision": 0.8213708746826679,
+        "recall": 0.5363978899773926,
+        "AP@0.5": 0.6986819378433152
+      },
+      "truck": {
+        "gt": 2227,
+        "pred": 121,
+        "tp": 0,
+        "fp": 121,
+        "fn": 2227,
+        "precision": 0.0,
+        "recall": 0.0,
+        "AP@0.5": 0.03886313447916792
+      }
+    }
+  },
+  "risk_definition": {
+    "horizon_s": 2.0,
+    "distance_threshold": "predicted center distance <= person_box_height * 0.5",
+    "sustain_frames": 3,
+    "overlap_rule": "current person-obstacle box overlap is always risky",
+    "obstacles": [
+      "bicycle",
+      "car",
+      "motorbike",
+      "truck"
+    ]
+  },
+  "gt_risk_start": {
+    "frame": null,
+    "time_s": null,
+    "pair": null
+  },
+  "yolo_risk_start": {
+    "frame": 211,
+    "time_s": 8.791666666666666,
+    "pair": {
+      "person_track_id": 60,
+      "obstacle_track_id": 57,
+      "obstacle_class": "motorbike",
+      "t_cpa_s": 2.0,
+      "d_cpa_px": 13.504517416992421,
+      "threshold_px": 95.11541748046875,
+      "overlap_now": true
+    }
+  },
+  "warning_lead_time_s": null
+}

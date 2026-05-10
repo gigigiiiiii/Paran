@@ -47,6 +47,8 @@ class MonitorService:
 
         self._latest_frame_jpeg: bytes | None = None
         self._latest_result: dict[str, Any]   = {}
+        self._latest_detections: list[dict[str, Any]] = []
+        self._latest_detection_ts: float = 0.0
         self._events = deque(maxlen=5000)
         self._recording_enabled    = False
         self._session_id: str | None = None
@@ -147,6 +149,16 @@ class MonitorService:
             args.vehicle_box_expand = float(os.getenv("MONITOR_VEHICLE_BOX_EXPAND"))
         if os.getenv("MONITOR_VEHICLE_BOX_EXPAND_X"):
             args.vehicle_box_expand_x = float(os.getenv("MONITOR_VEHICLE_BOX_EXPAND_X"))
+        if os.getenv("MONITOR_PAIR_DISTANCE_PERCENTILE"):
+            args.pair_distance_percentile = float(os.getenv("MONITOR_PAIR_DISTANCE_PERCENTILE"))
+        if os.getenv("MONITOR_SAMPLE_Z_MAX_OFFSET"):
+            args.sample_z_max_offset = float(os.getenv("MONITOR_SAMPLE_Z_MAX_OFFSET"))
+        if os.getenv("MONITOR_DEPTH_MAX_AGE_SEC"):
+            args.depth_max_age_sec = float(os.getenv("MONITOR_DEPTH_MAX_AGE_SEC"))
+        if os.getenv("MONITOR_DETECTION_CLASSES"):
+            args.detection_classes = os.getenv("MONITOR_DETECTION_CLASSES").strip()
+        if os.getenv("MONITOR_OBSTACLE_CLASSES"):
+            args.obstacle_classes = os.getenv("MONITOR_OBSTACLE_CLASSES").strip()
         if os.getenv("MONITOR_WIDTH"):
             args.width = int(os.getenv("MONITOR_WIDTH"))
         if os.getenv("MONITOR_HEIGHT"):
@@ -207,7 +219,7 @@ class MonitorService:
 
         return args
 
-    def _apply_mode_model(self, args, is_live: bool) -> None:
+    def _apply_mode_model(self, args, is_live: bool, source: str | None = None) -> None:
         _project_root = Path(__file__).resolve().parent.parent
         if is_live:
             live_model_env = os.getenv("MONITOR_LIVE_MODEL", "").strip()
@@ -219,6 +231,22 @@ class MonitorService:
             if test_model_env:
                 _m = Path(test_model_env)
                 args.model = str(_m if _m.is_absolute() else _project_root / _m)
+            if os.getenv("MONITOR_TEST_WIDTH"):
+                args.width = int(os.getenv("MONITOR_TEST_WIDTH"))
+            if os.getenv("MONITOR_TEST_HEIGHT"):
+                args.height = int(os.getenv("MONITOR_TEST_HEIGHT"))
+            if os.getenv("MONITOR_TEST_IMGSZ"):
+                args.imgsz = int(os.getenv("MONITOR_TEST_IMGSZ"))
+            if os.getenv("MONITOR_TEST_DETECTION_CLASSES"):
+                args.detection_classes = os.getenv("MONITOR_TEST_DETECTION_CLASSES").strip()
+            if os.getenv("MONITOR_TEST_OBSTACLE_CLASSES"):
+                args.obstacle_classes = os.getenv("MONITOR_TEST_OBSTACLE_CLASSES").strip()
+            if os.getenv("MONITOR_TEST_DEPTH_MODEL"):
+                args.depth_model = os.getenv("MONITOR_TEST_DEPTH_MODEL").strip()
+            if os.getenv("MONITOR_TEST_MODEL_DEPTH_INTERVAL"):
+                args.model_depth_interval = float(os.getenv("MONITOR_TEST_MODEL_DEPTH_INTERVAL"))
+            process_every_frame = os.getenv("MONITOR_TEST_PROCESS_EVERY_FRAME", "0").strip().lower()
+            args.video_process_every_frame = process_every_frame not in {"0", "false", "no", "off"}
 
     # ── 러너 생명주기 ─────────────────────────────────────────────────────────
 
@@ -232,11 +260,16 @@ class MonitorService:
             self._current_mode = f"test:{Path(video_source).name}" if video_source else "live"
         try:
             if video_source:
-                self._apply_mode_model(args, is_live=False)
+                self._apply_mode_model(args, is_live=False, source=video_source)
                 print(f"[INFO] VideoRunner 모드: {video_source} / 모델: {args.model}")
                 args.video_source = video_source
                 args.video_loop   = True
-                self._runner = VideoRunner(args, display=False, on_result=self._on_runner_result)
+                self._runner = VideoRunner(
+                    args,
+                    display=False,
+                    on_result=self._on_runner_result,
+                    on_frame=self._on_runner_frame,
+                )
             else:
                 self._apply_mode_model(args, is_live=True)
                 print(f"[INFO] PipelineRunner(RealSense) / 모델: {args.model}")
@@ -308,11 +341,16 @@ class MonitorService:
 
         try:
             if source:
-                self._apply_mode_model(args, is_live=False)
+                self._apply_mode_model(args, is_live=False, source=source)
                 print(f"[INFO] VideoRunner 전환: {source} / 모델: {args.model}")
                 args.video_source = source
                 args.video_loop   = True
-                self._runner = VideoRunner(args, display=False, on_result=self._on_runner_result)
+                self._runner = VideoRunner(
+                    args,
+                    display=False,
+                    on_result=self._on_runner_result,
+                    on_frame=self._on_runner_frame,
+                )
             else:
                 self._apply_mode_model(args, is_live=True)
                 print(f"[INFO] PipelineRunner(RealSense) 전환 / 모델: {args.model}")
@@ -740,6 +778,44 @@ class MonitorService:
 
     # ── 프레임 콜백 & 스트리밍 ───────────────────────────────────────────────
 
+    def _on_runner_frame(self, frame):
+        with self._lock:
+            detections = list(self._latest_detections)
+            detection_age = time.time() - self._latest_detection_ts
+        if detections and detection_age <= 1.0:
+            frame = frame.copy()
+            for det in detections:
+                bbox = det.get("bbox")
+                if not isinstance(bbox, list) or len(bbox) != 4:
+                    continue
+                try:
+                    x1, y1, x2, y2 = [int(v) for v in bbox]
+                except (TypeError, ValueError):
+                    continue
+                kind = str(det.get("kind") or "")
+                color = (50, 220, 50) if kind == "person" else (0, 165, 255)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                label = str(det.get("name") or kind or "object")
+                cv2.putText(
+                    frame,
+                    label,
+                    (x1, max(18, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    color,
+                    2,
+                    cv2.LINE_AA,
+                )
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)],
+        )
+        if not ok:
+            return
+        with self._lock:
+            self._latest_frame_jpeg = encoded.tobytes()
+
     def _on_runner_result(self, result: dict[str, Any], canvas):
         ok, encoded = cv2.imencode(
             ".jpg",
@@ -753,6 +829,10 @@ class MonitorService:
         with self._lock:
             self._latest_result = dict(result)
             self._latest_result["recording_enabled"] = self._recording_enabled
+            detections = result.get("detections")
+            if isinstance(detections, list):
+                self._latest_detections = [d for d in detections if isinstance(d, dict)]
+                self._latest_detection_ts = time.time()
             if encoded_bytes is not None:
                 self._latest_frame_jpeg = encoded_bytes
 
@@ -829,6 +909,28 @@ class MonitorService:
             "fps":          int(self._args.fps)          if self._args is not None else None,
             "jpeg_quality": int(self._jpeg_quality),
         }
+        debug_info = {}
+        if self._args is not None:
+            model_path = str(getattr(self._args, "model", "") or "")
+            debug_info = {
+                "mode":                      self._current_mode,
+                "model":                     Path(model_path).name if model_path else None,
+                "model_path":                model_path or None,
+                "width":                     int(getattr(self._args, "width", 0) or 0),
+                "height":                    int(getattr(self._args, "height", 0) or 0),
+                "imgsz":                     int(getattr(self._args, "imgsz", 0) or 0),
+                "depth_model":               str(getattr(self._args, "depth_model", "") or ""),
+                "model_depth_interval":      float(getattr(self._args, "model_depth_interval", 0.0) or 0.0),
+                "depth_max_age_sec":         float(getattr(self._args, "depth_max_age_sec", 0.0) or 0.0),
+                "pair_distance_percentile":  float(getattr(self._args, "pair_distance_percentile", 0.0) or 0.0),
+                "sample_z_max_offset":       float(getattr(self._args, "sample_z_max_offset", 0.0) or 0.0),
+                "detection_classes":         str(getattr(self._args, "detection_classes", "") or ""),
+                "obstacle_classes":          str(getattr(self._args, "obstacle_classes", "") or ""),
+                "video_process_every_frame": bool(getattr(self._args, "video_process_every_frame", False)),
+                "video_depth_sync":          bool(getattr(self._args, "video_depth_sync", False)),
+                "track_count":               int(latest.get("track_count") or 0),
+                "depth_age_s":               latest.get("depth_age_s"),
+            }
         return {
             "recording_enabled":    recording_enabled,
             "session_id":           session_id,
@@ -843,4 +945,5 @@ class MonitorService:
                 "table":      self._db._table if self._db.enabled else None,
                 "last_error": storage_error,
             },
+            "debug":                debug_info,
         }

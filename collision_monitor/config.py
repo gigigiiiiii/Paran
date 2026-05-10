@@ -8,6 +8,7 @@ PERSON_CLASS_ALIASES = {"person", "Person", "pedestrian", "people"}
 # yolo26m.pt (COCO 80클래스) 기준 장애물 클래스
 OBSTACLE_CLASSES_DEFAULT = {
     "car", "motorcycle", "bicycle", "bus", "truck", "train",
+    "van", "motor", "tricycle", "awning-tricycle",
 }
 
 FIXED_CLASSES_DEFAULT: set = set()
@@ -51,6 +52,7 @@ def parse_args(argv=None):
 
     parser.add_argument("--obstacle-classes", type=str, default="", help="Comma separated obstacle class names")
     parser.add_argument("--fixed-classes", type=str, default="", help="Comma separated fixed obstacle class names")
+    parser.add_argument("--detection-classes", type=str, default="", help="Comma separated class names to pass to YOLO inference")
     parser.add_argument("--all-non-person", action="store_true", help="Treat all non-person classes as obstacles.")
 
     parser.add_argument("--use-sahi", action="store_true", dest="use_sahi",

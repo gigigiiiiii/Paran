@@ -32,9 +32,7 @@ def draw_detections(
     """사람·장애물 bbox + 모든 위험 쌍 연결선을 canvas에 그린다."""
     for p in people:
         x1, y1, x2, y2 = p["bbox"]
-        tid    = p.get("track_id")
-        id_tag = f" #{tid}" if tid is not None else ""
-        label = f"person{id_tag}  {p['conf']:.0%}"
+        label = "person"
         box_color = CLASS_COLORS.get("person", (50, 220, 50))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
         cv2.putText(canvas, label,
@@ -44,9 +42,7 @@ def draw_detections(
     for o in obstacles:
         x1, y1, x2, y2 = o["bbox"]
         det_bbox = o.get("det_bbox")
-        tid    = o.get("track_id")
-        id_tag = f" #{tid}" if tid is not None else ""
-        label = f"{o['name']}{id_tag}  {o['conf']:.0%}"
+        label = f"{o['name']}"
         box_color = CLASS_COLORS.get(o["name"], (220, 120, 60))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
         cv2.putText(canvas, label,

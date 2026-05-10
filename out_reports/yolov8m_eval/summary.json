@@ -1,0 +1,106 @@
+{
+  "video": "test_videos\\KakaoTalk_20260509_190512638.mp4",
+  "model": "yolov8m.pt",
+  "frames_expected": 4688,
+  "frames_processed": 4688,
+  "source_fps": 24.0,
+  "imgsz": 1280,
+  "inference_conf_threshold_for_ap": 0.001,
+  "confidence_threshold_for_precision_recall": 0.35,
+  "yolo_nms_iou": 0.45,
+  "average_inference_fps": 29.71137028143598,
+  "inference_time_s": 157.7847118996433,
+  "metrics": {
+    "iou_threshold": 0.5,
+    "precision_recall_conf_threshold": 0.35,
+    "precision": 0.7896339083600031,
+    "recall": 0.854716742004985,
+    "mAP@0.5": 0.5400191233372079,
+    "tp": 20232,
+    "fp": 5390,
+    "fn": 3439,
+    "per_class": {
+      "person": {
+        "gt": 14808,
+        "pred": 16790,
+        "tp": 14176,
+        "fp": 2614,
+        "fn": 632,
+        "precision": 0.8443120905300774,
+        "recall": 0.9573203673689897,
+        "AP@0.5": 0.9604600834423211
+      },
+      "bicycle": {
+        "gt": 1,
+        "pred": 8,
+        "tp": 0,
+        "fp": 8,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "AP@0.5": 0.0
+      },
+      "motorbike": {
+        "gt": 0,
+        "pred": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "AP@0.5": null
+      },
+      "car": {
+        "gt": 6635,
+        "pred": 7322,
+        "tp": 5823,
+        "fp": 1499,
+        "fn": 812,
+        "precision": 0.7952745151597924,
+        "recall": 0.8776186887716654,
+        "AP@0.5": 0.9094991092193802
+      },
+      "truck": {
+        "gt": 2227,
+        "pred": 1502,
+        "tp": 233,
+        "fp": 1269,
+        "fn": 1994,
+        "precision": 0.15512649800266312,
+        "recall": 0.10462505612932196,
+        "AP@0.5": 0.2901173006871301
+      }
+    }
+  },
+  "risk_definition": {
+    "horizon_s": 2.0,
+    "distance_threshold": "predicted center distance <= person_box_height * 0.5",
+    "sustain_frames": 3,
+    "overlap_rule": "current person-obstacle box overlap is always risky",
+    "obstacles": [
+      "bicycle",
+      "car",
+      "motorbike",
+      "truck"
+    ]
+  },
+  "gt_risk_start": {
+    "frame": null,
+    "time_s": null,
+    "pair": null
+  },
+  "yolo_risk_start": {
+    "frame": 301,
+    "time_s": 12.541666666666666,
+    "pair": {
+      "person_track_id": 2,
+      "obstacle_track_id": 41,
+      "obstacle_class": "car",
+      "t_cpa_s": 0.0,
+      "d_cpa_px": 30.77642906770041,
+      "threshold_px": 15.164512634277344,
+      "overlap_now": true
+    }
+  },
+  "warning_lead_time_s": null
+}

@@ -92,7 +92,7 @@ class FrameProcessor:
         self.obstacle_grid_y = max(1, int(args.obstacle_grid_y))
         self.vehicle_box_expand = max(1.0, float(getattr(args, "vehicle_box_expand", 1.0)))
         self.vehicle_box_expand_x = max(0.0, float(getattr(args, "vehicle_box_expand_x", 0.0)))
-        self.vehicle_expand_classes: set[str] = set()
+        self.vehicle_expand_classes: set[str] = set(OBSTACLE_CLASSES_DEFAULT)
 
         # ── 클래스 분류 ───────────────────────────────────────────────────────
         if args.all_non_person:
@@ -110,6 +110,9 @@ class FrameProcessor:
         # ── YOLO 모델 ─────────────────────────────────────────────────────────
         self.model = YOLO(args.model)
         self.class_names = getattr(self.model, "names", None) or self.model.model.names
+        self._infer_class_ids = self._resolve_infer_class_ids(
+            str(getattr(args, "detection_classes", "") or "")
+        )
 
         import torch
         if torch.cuda.is_available():
@@ -184,6 +187,32 @@ class FrameProcessor:
         self.log_file, self.log_writer = maybe_open_log(getattr(args, "log_file", ""))
         self._log_flush_counter  = 0
         self._log_flush_interval = 30
+
+    def _resolve_infer_class_ids(self, class_names_csv: str) -> list[int] | None:
+        wanted = {x.strip() for x in class_names_csv.split(",") if x.strip()}
+        if not wanted:
+            return None
+
+        aliases = dict.fromkeys(PERSON_CLASS_ALIASES, PERSON_CLASS_NAME)
+        normalized_model_names: dict[int, str] = {}
+        iterator = (
+            self.class_names.items()
+            if isinstance(self.class_names, dict)
+            else enumerate(self.class_names)
+        )
+        for cls_id, raw_name in iterator:
+            name = str(raw_name)
+            normalized_model_names[int(cls_id)] = aliases.get(name, name)
+
+        ids = [
+            cls_id
+            for cls_id, normalized in normalized_model_names.items()
+            if normalized in wanted or str(self.class_names[cls_id] if not isinstance(self.class_names, dict) else self.class_names.get(cls_id)) in wanted
+        ]
+        missing = sorted(wanted - set(normalized_model_names.values()))
+        if missing:
+            print(f"[FrameProcessor][WARN] detection classes not found in model: {missing}")
+        return ids or None
 
     # ── 위험도 안정화 ─────────────────────────────────────────────────────────
 
@@ -363,6 +392,18 @@ class FrameProcessor:
         item["velocity"] = v_s
         item["velocity_confidence"] = float(np.clip(confidence, 0.0, 1.0))
 
+    def _center_clearance_distance(self, person, obs) -> tuple[float | None, float | None, float | None]:
+        p_pt = person.get("point_3d")
+        o_pt = obs.get("point_3d")
+        if p_pt is None or o_pt is None:
+            return None, None, None
+        dx = float(p_pt[0] - o_pt[0])
+        dz = float(p_pt[2] - o_pt[2])
+        center_dist = float(np.sqrt(dx * dx + dz * dz))
+        obs_radius = float(obs.get("obstacle_radius_m") or self.obstacle_radius_min_m)
+        clearance = center_dist - self.person_radius_m - obs_radius
+        return max(0.0, float(clearance)), abs(dx), abs(dz)
+
     def process(
         self,
         color_image: np.ndarray,
@@ -402,18 +443,21 @@ class FrameProcessor:
                     verbose=False,
                     device=self._infer_device,
                     half=self._use_half,
+                    classes=self._infer_class_ids,
                 )[0]
             except Exception as e:
                 print(f"[FrameProcessor][WARN] track() 실패, predict() fallback: {e}")
                 _r = self.model.predict(
                     color_image, conf=args.conf, imgsz=imgsz, iou=0.45, verbose=False,
                     device=self._infer_device, half=self._use_half,
+                    classes=self._infer_class_ids,
                 )[0]
             raw_boxes = _r.boxes
         else:
             _r = self.model.predict(
                 color_image, conf=args.conf, imgsz=imgsz, iou=0.45, verbose=False,
                 device=self._infer_device, half=self._use_half,
+                classes=self._infer_class_ids,
             )[0]
             raw_boxes = _r.boxes
 
@@ -434,7 +478,7 @@ class FrameProcessor:
                 name = PERSON_CLASS_NAME
             x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].cpu().numpy()]
             det_bbox = (x1, y1, x2, y2)
-            if name in OBSTACLE_CLASSES_DEFAULT:
+            if name in self.vehicle_expand_classes:
                 x1, y1, x2, y2 = self._expand_vehicle_bbox(
                     (x1, y1, x2, y2), frame_w, frame_h
                 )
@@ -679,7 +723,11 @@ class FrameProcessor:
                         self.display_dist_smooth.pop(pair_key, None)
                         continue
 
-                    raw_dist = float(dist)
+                    sample_dist = float(dist)
+                    clearance_dist, lateral_center_gap, longitudinal_gap = self._center_clearance_distance(person, obs)
+                    raw_dist = sample_dist
+                    if clearance_dist is not None:
+                        raw_dist = min(raw_dist, float(clearance_dist))
                     prev_dist = self.pair_dist_smooth.get(pair_key)
                     if prev_dist is not None and self.distance_smooth_alpha > 0.0:
                         dist = (
@@ -780,6 +828,21 @@ class FrameProcessor:
                         pair_score *= self.receding_risk_scale
                         pair_ttc = None
                     pair_score *= self.confidence_risk_floor + (1.0 - self.confidence_risk_floor) * pair_conf
+                    side_pass = (
+                        clearance_dist is not None
+                        and lateral_center_gap is not None
+                        and longitudinal_gap is not None
+                        and clearance_dist <= args.warn_dist
+                        and longitudinal_gap <= max(2.5, float(obs.get("height_m") or 0.0), float(obs.get("width_m") or 0.0) * 1.8)
+                    )
+                    if side_pass:
+                        span = max(1e-6, float(args.warn_dist) - float(args.danger_dist))
+                        clearance_ratio = float(np.clip(
+                            (float(args.warn_dist) - float(clearance_dist)) / span,
+                            0.0, 1.0,
+                        ))
+                        side_floor = self.score_warn_on + clearance_ratio * (self.score_danger_on - self.score_warn_on)
+                        pair_score = max(pair_score, side_floor)
                     if proximity_dist <= args.danger_dist:
                         pair_score = max(pair_score, self.score_danger_on)
                     elif proximity_dist <= args.warn_dist:
@@ -827,7 +890,9 @@ class FrameProcessor:
                         self.line_uv_smooth[pair_key] = (display_ps_uv, display_os_uv)
                     all_risk_pairs.append({
                         "person": person, "obs": obs,
-                        "dist": dist, "raw_dist": raw_dist, "ttc": pair_ttc,
+                        "dist": dist, "raw_dist": raw_dist, "sample_dist": sample_dist,
+                        "clearance_dist": clearance_dist, "side_pass": side_pass,
+                        "ttc": pair_ttc,
                         "display_dist": display_dist,
                         "closing_speed": pair_cs, "signed_closing_speed": signed_pair_cs,
                         "score": pair_score, "level": pair_level,
@@ -994,6 +1059,23 @@ class FrameProcessor:
         self.prev_obstacle_points = curr_obstacle_points
 
         # ── result dict ───────────────────────────────────────────────────────
+        detections = []
+        for kind, items in (("person", people), ("obstacle", obstacles)):
+            for item in items:
+                bbox = item.get("bbox")
+                if bbox is None:
+                    continue
+                try:
+                    x1, y1, x2, y2 = [int(round(float(v))) for v in bbox]
+                except (TypeError, ValueError):
+                    continue
+                detections.append({
+                    "bbox": [x1, y1, x2, y2],
+                    "name": str(item.get("name") or ""),
+                    "track_id": int(item["track_id"]) if item.get("track_id") is not None else None,
+                    "kind": kind,
+                })
+
         result = {
             "ts_epoch"         : float(now),
             "risk"             : level,
@@ -1012,5 +1094,6 @@ class FrameProcessor:
             "obstacle_name"    : nearest_pair[1]["name"]           if nearest_pair else None,
             "angle_deg"        : float(nearest_pair[2])            if nearest_pair else None,
             "track_count"      : len(people) + len(obstacles),
+            "detections"       : detections,
         }
         return canvas, result

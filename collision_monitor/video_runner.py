@@ -21,10 +21,11 @@ from .frame_processor import FrameProcessor
 
 
 class VideoRunner:
-    def __init__(self, args, display: bool = False, on_result=None):
+    def __init__(self, args, display: bool = False, on_result=None, on_frame=None):
         self.args      = args
         self.display   = display
         self.on_result = on_result
+        self.on_frame  = on_frame
         self._stop     = False
         self._closed   = False
 
@@ -41,10 +42,14 @@ class VideoRunner:
         self._dm_lock           = threading.Lock()
         self._dm_input_frame    = None   # 메인 → 워커
         self._dm_latest_result  = None   # 워커 → 메인
+        self._dm_latest_ts      = 0.0
         self._dm_stop           = threading.Event()
         self._dm_thread         = None
         self._dm_last_submit_ts = 0.0
         self._dm_interval_sec   = max(0.0, float(getattr(args, "model_depth_interval", 0.2)))
+        self._dm_max_age_sec    = max(0.0, float(getattr(args, "depth_max_age_sec", 0.0) or 0.0))
+        if self._dm_max_age_sec <= 0.0:
+            self._dm_max_age_sec = max(1.0, self._dm_interval_sec * 4.0)
         self._sync_depth        = bool(getattr(args, "video_depth_sync", False))
 
         depth_model_id = getattr(args, "depth_model", "none")
@@ -95,6 +100,7 @@ class VideoRunner:
                 result = self._depth_model.infer(frame)
                 with self._dm_lock:
                     self._dm_latest_result = result
+                    self._dm_latest_ts = time.time()
             except Exception as exc:
                 print(f"[VideoDepthWorker] 추론 오류: {exc}")
 
@@ -132,13 +138,28 @@ class VideoRunner:
                 return
 
             fps_src = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            target_w = int(getattr(self.args, "width", 0) or 0)
+            target_h = int(getattr(self.args, "height", 0) or 0)
+            resize_to = None
+            if target_w > 0 and target_h > 0 and (src_w, src_h) != (target_w, target_h):
+                resize_to = (target_w, target_h)
             print(f"[VideoRunner] 소스: {self._source} | {fps_src:.0f}fps")
+            if resize_to is not None:
+                print(
+                    f"[VideoRunner] Processing resize: {src_w}x{src_h} -> "
+                    f"{target_w}x{target_h}"
+                )
 
             # ── 최신 프레임 버퍼 (Reader → Infer) ──────────────────────────
             _buf_lock   = threading.Lock()
             _latest_buf = [None]   # [frame | None]
             _eof        = [False]
-
+            _process_every_frame = (
+                not isinstance(self._source, int)
+                and bool(getattr(self.args, "video_process_every_frame", True))
+            )
             def _reader_thread():
                 interval = 1.0 / fps_src
                 while not self._stop:
@@ -148,6 +169,18 @@ class VideoRunner:
                         with _buf_lock:
                             _eof[0] = True
                         break
+                    if resize_to is not None:
+                        interpolation = (
+                            cv2.INTER_AREA
+                            if frame.shape[1] > resize_to[0] or frame.shape[0] > resize_to[1]
+                            else cv2.INTER_LINEAR
+                        )
+                        frame = cv2.resize(frame, resize_to, interpolation=interpolation)
+                    while _process_every_frame and not self._stop:
+                        with _buf_lock:
+                            if _latest_buf[0] is None:
+                                break
+                        time.sleep(0.001)
                     with _buf_lock:
                         _latest_buf[0] = frame   # 이전 미처리 프레임 덮어씀
                     elapsed = time.time() - t0
@@ -174,6 +207,7 @@ class VideoRunner:
                 depth_image = None
                 intrinsics  = None
                 depth_scale = None
+                depth_age_s = None
 
                 if self._depth_model is not None:
                     if self._pseudo_intrinsics is None:
@@ -186,16 +220,24 @@ class VideoRunner:
                     if self._sync_depth:
                         try:
                             depth_image = self._depth_model.infer(frame)
+                            depth_age_s = 0.0
                         except Exception as exc:
                             print(f"[VideoRunner] Sync depth inference error: {exc}")
                             depth_image = None
+                            depth_age_s = None
                     else:
                         now_ts = time.time()
                         with self._dm_lock:
                             if now_ts - self._dm_last_submit_ts >= self._dm_interval_sec:
                                 self._dm_input_frame    = frame.copy()
                                 self._dm_last_submit_ts = now_ts
-                            depth_image = self._dm_latest_result
+                            latest_depth = self._dm_latest_result
+                            latest_depth_ts = self._dm_latest_ts
+                        depth_age_s = (now_ts - latest_depth_ts) if latest_depth_ts > 0 else None
+                        if depth_age_s is not None and depth_age_s <= self._dm_max_age_sec:
+                            depth_image = latest_depth
+                        else:
+                            depth_image = None
 
                     intrinsics  = self._pseudo_intrinsics
                     depth_scale = self._depth_scale
@@ -206,6 +248,8 @@ class VideoRunner:
                     intrinsics=intrinsics,
                     depth_scale=depth_scale,
                 )
+                result["depth_age_s"] = float(depth_age_s) if depth_age_s is not None else None
+                result["depth_available"] = depth_image is not None
 
                 if self.on_result is not None:
                     self.on_result(result, canvas)
