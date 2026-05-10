@@ -70,6 +70,7 @@ class Chain3Output(BaseModel):
     risk_distribution: dict[str, int]
     total_events: int = Field(ge=0)
     key_cases: list[KeyCase]
+    top_obstacles: list[TopObstacle]
     risk_patterns: list[str]
     improvements: list[str]
 

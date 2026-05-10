@@ -38,6 +38,46 @@ def _case_row(event: dict[str, Any]) -> list[str]:
     ]
 
 
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number
+
+
+def _max_metric(events: list[Any], key: str) -> float | None:
+    values = [
+        value
+        for event in events
+        if isinstance(event, dict)
+        for value in [_to_float(event.get(key))]
+        if value is not None
+    ]
+    return max(values) if values else None
+
+
+def _min_metric(events: list[Any], key: str) -> float | None:
+    values = [
+        value
+        for event in events
+        if isinstance(event, dict)
+        for value in [_to_float(event.get(key))]
+        if value is not None
+    ]
+    return min(values) if values else None
+
+
+def _danger_ratio(distribution: dict[str, Any], total_events: Any) -> float | None:
+    total = _to_float(total_events)
+    if total is None or total <= 0:
+        return None
+    high = _to_float(distribution.get("high")) or 0.0
+    return round((high / total) * 100)
+
+
 def _table_style(font_size: int = 8, font_name: str = "Helvetica"):
     from reportlab.lib import colors
     from reportlab.platypus import TableStyle
@@ -87,6 +127,7 @@ def write_daily_report_pdf(
     chain2_output: dict[str, Any],
     output_dir: str | os.PathLike[str],
     report_date: date,
+    filename: str | None = None,
 ) -> Path:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -94,14 +135,22 @@ def write_daily_report_pdf(
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"daily_report_{report_date.isoformat()}.pdf"
+    safe_filename = Path(filename).name if filename else f"daily_report_{report_date.isoformat()}.pdf"
+    if not safe_filename.endswith(".pdf"):
+        safe_filename = f"{safe_filename}.pdf"
+    path = out_dir / safe_filename
 
     font_available = _register_korean_font()
     styles = getSampleStyleSheet()
     _apply_korean_font(styles, font_available)
+    table_font = _KOREAN_FONT_NAME if font_available else "Helvetica"
 
     doc = SimpleDocTemplate(str(path), pagesize=A4, rightMargin=32, leftMargin=32, topMargin=32, bottomMargin=32)
     title = str(chain2_output.get("title") or "일일 충돌 위험 보고서")
+    key_cases = [event for event in (chain2_output.get("key_cases") or []) if isinstance(event, dict)]
+    top_key_cases = key_cases[:10]
+    distribution = chain2_output.get("risk_distribution") or {}
+    total_events = chain2_output.get("total_events") or 0
     story = [
         Paragraph(f"{html.escape(title)} - {report_date.isoformat()}", styles["Title"]),
         Spacer(1, 12),
@@ -110,40 +159,77 @@ def write_daily_report_pdf(
         Spacer(1, 12),
     ]
 
-    distribution = chain2_output.get("risk_distribution") or {}
     risk_table = Table([
-        ["Total Events", "High", "Medium", "Low"],
+        ["총 이벤트", "High", "Medium", "Low"],
         [
-            str(chain2_output.get("total_events") or 0),
+            str(total_events),
             str(distribution.get("high") or 0),
             str(distribution.get("medium") or 0),
             str(distribution.get("low") or 0),
         ],
     ], repeatRows=1)
-    risk_table.setStyle(_table_style())
+    risk_table.setStyle(_table_style(font_name=table_font))
     story.extend([
         Paragraph("2. 위험 등급 분포", styles["Heading2"]),
         risk_table,
         Spacer(1, 12),
     ])
 
+    metric_table = Table([
+        ["위험 비율", "최고 위험도", "최단 거리", "최단 TTC"],
+        [
+            _fmt(_danger_ratio(distribution, total_events), "%"),
+            _fmt(_max_metric(key_cases, "risk_percent"), "%"),
+            _fmt(_min_metric(key_cases, "rep_distance_m"), " m"),
+            _fmt(_min_metric(key_cases, "ttc_s"), " s"),
+        ],
+    ], repeatRows=1)
+    metric_table.setStyle(_table_style(font_name=table_font))
+    story.extend([
+        Paragraph("3. 핵심 지표", styles["Heading2"]),
+        metric_table,
+        Spacer(1, 12),
+    ])
+
+    obstacle_rows = [["장애물", "발생 건수"]]
+    for obstacle in chain2_output.get("top_obstacles") or []:
+        if isinstance(obstacle, dict):
+            obstacle_rows.append([
+                str(obstacle.get("name") or "-"),
+                str(obstacle.get("count") or 0),
+            ])
+    if len(obstacle_rows) == 1:
+        obstacle_rows.append(["-", "-"])
+    obstacle_table = Table(obstacle_rows, repeatRows=1)
+    obstacle_table.setStyle(_table_style(font_name=table_font))
+    story.extend([
+        Paragraph("4. 주요 장애물", styles["Heading2"]),
+        obstacle_table,
+        Spacer(1, 12),
+    ])
+
     case_rows = [["Time", "Level", "Risk", "Obstacle", "Distance", "TTC"]]
-    for event in chain2_output.get("key_cases") or []:
-        if isinstance(event, dict):
-            case_rows.append(_case_row(event))
+    for event in top_key_cases:
+        case_rows.append(_case_row(event))
     if len(case_rows) == 1:
         case_rows.append(["-", "-", "-", "-", "-", "-"])
 
     case_table = Table(case_rows, repeatRows=1)
-    case_table.setStyle(_table_style(font_size=7))
+    case_table.setStyle(_table_style(font_size=7, font_name=table_font))
     story.extend([
-        Paragraph("3. 핵심 케이스", styles["Heading2"]),
+        Paragraph("5. 핵심 케이스", styles["Heading2"]),
         case_table,
         Spacer(1, 12),
     ])
+    if top_key_cases:
+        for index, case in enumerate(top_key_cases, start=1):
+            reason = str(case.get("why_key") or case.get("judgement_reason") or "-")
+            case_label = str(case.get("event_time") or case.get("event_id") or index)
+            story.append(Paragraph(f"{index}. {html.escape(case_label)}: {html.escape(reason)}", styles["BodyText"]))
+        story.append(Spacer(1, 12))
 
-    snapshot_flowables = _snapshot_flowables(chain2_output.get("key_cases") or [], styles, Image)
-    story.append(Paragraph("4. 증거 스냅샷", styles["Heading2"]))
+    snapshot_flowables = _snapshot_flowables(top_key_cases, styles, Image)
+    story.append(Paragraph("6. 증거 스냅샷", styles["Heading2"]))
     if snapshot_flowables:
         story.extend(snapshot_flowables)
     else:
@@ -151,7 +237,7 @@ def write_daily_report_pdf(
     story.append(Spacer(1, 12))
 
     risk_patterns = chain2_output.get("risk_patterns") or []
-    story.append(Paragraph("5. 위험 패턴", styles["Heading2"]))
+    story.append(Paragraph("7. 위험 패턴", styles["Heading2"]))
     if risk_patterns:
         for item in risk_patterns:
             story.append(Paragraph(f"- {html.escape(str(item))}", styles["BodyText"]))
@@ -160,7 +246,7 @@ def write_daily_report_pdf(
     story.append(Spacer(1, 12))
 
     improvements = chain2_output.get("improvements") or []
-    story.append(Paragraph("6. 개선 조치", styles["Heading2"]))
+    story.append(Paragraph("8. 개선 조치", styles["Heading2"]))
     if improvements:
         for item in improvements:
             story.append(Paragraph(f"- {html.escape(str(item))}", styles["BodyText"]))
@@ -198,6 +284,7 @@ def prepare_final_report_material(
             )
         final_output["risk_distribution"] = dict(chain2_output.get("risk_distribution") or {})
         final_output["total_events"] = int(chain2_output.get("total_events") or 0)
+        final_output["top_obstacles"] = list(chain2_output.get("top_obstacles") or [])
         return validate_model(Chain3Output, final_output)
     except Exception as exc:
         fallback = dict(chain2_output)
@@ -266,6 +353,7 @@ class DashboardReportGenerator:
         session_id: str | None = None,
         events: list[dict[str, Any]] | None = None,
         llm_provider: str | None = None,
+        pdf_filename: str | None = None,
     ) -> dict[str, Any]:
         report_date = target_date or datetime.now().astimezone().date()
         selected_provider = normalize_llm_provider(llm_provider)
@@ -276,7 +364,7 @@ class DashboardReportGenerator:
         chain1_output = validate_events(filtered_events, llm_provider=selected_provider)
         chain2_output = build_report_material(chain1_output, llm_provider=selected_provider)
         chain3_output = prepare_final_report_material(chain2_output, llm_provider=selected_provider)
-        pdf_path = write_daily_report_pdf(chain3_output, self._output_dir, report_date)
+        pdf_path = write_daily_report_pdf(chain3_output, self._output_dir, report_date, filename=pdf_filename)
         return {
             "ok": True,
             "path": str(pdf_path),
@@ -295,10 +383,16 @@ class DashboardReportGenerator:
         session_id: str | None = None,
         output_format: str = "pdf",
         llm_provider: str | None = None,
+        pdf_filename: str | None = None,
     ) -> dict[str, Any]:
         if output_format.lower() != "pdf":
             raise ValueError("daily report chain output is PDF only")
-        return self.run_chains(target_date=target_date, session_id=session_id, llm_provider=llm_provider)
+        return self.run_chains(
+            target_date=target_date,
+            session_id=session_id,
+            llm_provider=llm_provider,
+            pdf_filename=pdf_filename,
+        )
 
 
 def _preserve_case_evidence(
@@ -330,18 +424,24 @@ def _snapshot_flowables(key_cases: list[Any], styles: Any, image_cls: Any, max_s
     for case in key_cases:
         if not isinstance(case, dict):
             continue
-        if str(case.get("risk_level") or "").strip() != "High":
-            continue
         snapshot_url = str(case.get("snapshot_url") or "").strip()
         if not snapshot_url:
             continue
-        image_bytes = _download_image(snapshot_url)
-        if image_bytes is None:
-            continue
         caption = (
-            f"{case.get('event_time', '-')} / DANGER / "
+            f"{case.get('event_time', '-')} / "
+            f"{case.get('risk_level', '-')} / "
             f"{case.get('obstacle_name', '-')}"
         )
+        image_bytes = _download_image(snapshot_url)
+        if image_bytes is None:
+            flowables.extend([
+                Paragraph(f"{html.escape(caption)} - 이미지를 불러올 수 없음", styles["BodyText"]),
+                Spacer(1, 8),
+            ])
+            added += 1
+            if added >= max_snapshots:
+                break
+            continue
         image = image_cls(BytesIO(image_bytes), width=260, height=146)
         flowables.extend([
             image,

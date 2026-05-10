@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timezone
+from io import BytesIO
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -113,7 +114,7 @@ def get_state():
 def get_events(
     limit: int = Query(default=100, ge=1, le=2000),
     offset: int = Query(default=0, ge=0, le=1000000),
-    include_total: bool = Query(default=False),
+    include_total: bool = Query(default=    False),
     session_id: str | None = Query(default=None),
 ):
     normalized_session_id = session_id.strip() if session_id else None
@@ -180,6 +181,101 @@ def _parse_report_date(value: str | None) -> date | None:
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD") from exc
 
 
+def _safe_report_session_id(session_id: str | None) -> str:
+    sid = session_id.strip() if session_id else ""
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    return sid
+
+
+def _report_download_url(session_id: str) -> str:
+    return f"/api/reports/session/{session_id}/pdf"
+
+
+def _report_response_from_row(row: dict) -> dict:
+    session_id = str(row.get("session_id") or "")
+    risk_distribution = row.get("risk_distribution") if isinstance(row.get("risk_distribution"), dict) else {}
+    risk_patterns = row.get("risk_patterns") if isinstance(row.get("risk_patterns"), list) else []
+    improvements = row.get("improvements") if isinstance(row.get("improvements"), list) else []
+    key_cases = row.get("key_cases") if isinstance(row.get("key_cases"), list) else []
+    top_obstacles = row.get("top_obstacles") if isinstance(row.get("top_obstacles"), list) else []
+    total_events = int(row.get("total_events") or 0)
+    summary = row.get("summary")
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "generated_at": row.get("generated_at"),
+        "path": row.get("pdf_path"),
+        "format": "pdf",
+        "output": row.get("pdf_filename"),
+        "llm_provider": row.get("llm_provider"),
+        "download_url": _report_download_url(session_id),
+        "report_date": row.get("report_date"),
+        "chain1": {
+            "risk_summary": risk_distribution,
+            "validated_count": total_events,
+        },
+        "chain2": {
+            "total_events": total_events,
+            "risk_distribution": risk_distribution,
+            "summary": summary,
+            "risk_patterns": risk_patterns,
+            "improvements": improvements,
+            "key_cases": key_cases,
+            "top_obstacles": top_obstacles,
+        },
+        "chain3": {
+            "summary": summary,
+            "improvements": improvements,
+            "key_cases": key_cases,
+            "risk_patterns": risk_patterns,
+        },
+        "report": {
+            "session_id": session_id,
+            "generated_at": row.get("generated_at"),
+            "report_date": row.get("report_date"),
+            "llm_provider": row.get("llm_provider"),
+            "summary": summary,
+            "total_events": total_events,
+            "risk_distribution": risk_distribution,
+            "risk_patterns": risk_patterns,
+            "improvements": improvements,
+            "key_cases": key_cases,
+            "top_obstacles": top_obstacles,
+            "pdf_bucket": row.get("pdf_bucket"),
+            "pdf_path": row.get("pdf_path"),
+            "pdf_filename": row.get("pdf_filename"),
+            "download_url": _report_download_url(session_id),
+        },
+    }
+
+
+def _report_row_from_generated_result(session_id: str, result: dict, pdf_path: str) -> dict:
+    chain2 = result.get("chain2") if isinstance(result.get("chain2"), dict) else {}
+    chain3 = result.get("chain3") if isinstance(result.get("chain3"), dict) else {}
+    risk_distribution = chain2.get("risk_distribution") if isinstance(chain2.get("risk_distribution"), dict) else {}
+    return {
+        "session_id": session_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "report_date": result.get("report_date"),
+        "llm_provider": result.get("llm_provider"),
+        "summary": chain3.get("summary") or chain2.get("summary") or "",
+        "total_events": int(chain2.get("total_events") or 0),
+        "risk_distribution": {
+            "high": int(risk_distribution.get("high") or 0),
+            "medium": int(risk_distribution.get("medium") or 0),
+            "low": int(risk_distribution.get("low") or 0),
+        },
+        "risk_patterns": chain3.get("risk_patterns") or chain2.get("risk_patterns") or [],
+        "improvements": chain3.get("improvements") or chain2.get("improvements") or [],
+        "key_cases": chain3.get("key_cases") or chain2.get("key_cases") or [],
+        "top_obstacles": chain2.get("top_obstacles") or [],
+        "pdf_bucket": service._db.report_bucket,
+        "pdf_path": pdf_path,
+        "pdf_filename": Path(pdf_path).name,
+    }
+
+
 @app.get("/api/reports/daily")
 def generate_daily_report(
     date_: str | None = Query(default=None, alias="date"),
@@ -188,40 +284,38 @@ def generate_daily_report(
     llm_provider: str | None = Query(default=None, pattern="^(api|local|gemini|qwen)$"),
     download: bool = Query(default=False),
 ):
-    normalized_session_id = session_id.strip() if session_id else None
-    if normalized_session_id == "":
-        normalized_session_id = None
+    normalized_session_id = _safe_report_session_id(session_id)
+    if not service._db.enabled:
+        raise HTTPException(status_code=500, detail="Supabase is not configured")
+    try:
+        existing_report = service._db.fetch_session_report(normalized_session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"stored report lookup failed: {exc}") from exc
+    if existing_report:
+        if download:
+            return download_session_report_pdf(normalized_session_id)
+        return _report_response_from_row(existing_report)
+
+    pdf_filename = f"daily_report_{normalized_session_id}.pdf"
     try:
         result = report_generator.generate(
             target_date=_parse_report_date(date_),
             session_id=normalized_session_id,
             output_format=format,
             llm_provider=llm_provider,
+            pdf_filename=pdf_filename,
         )
+        local_pdf_path = Path(result["path"])
+        storage_path = service._db.upload_report_pdf(normalized_session_id, local_pdf_path.read_bytes())
+        report_row = _report_row_from_generated_result(normalized_session_id, result, storage_path)
+        stored_report = service._db.insert_session_report(report_row)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"보고서 생성 실패: {exc}") from exc
     if download:
         return FileResponse(result["path"], filename=Path(result["path"]).name)
-    return {
-        "ok": result["ok"],
-        "path": result["path"],
-        "format": result["format"],
-        "output": result["output"],
-        "llm_provider": result.get("llm_provider"),
-        "download_url": f"/api/reports/files/{Path(result['path']).name}",
-        "report_date": result["report_date"],
-        "chain1": {
-            "risk_summary": result["chain1"]["risk_summary"],
-            "validated_count": len(result["chain1"]["validated_events"]),
-        },
-        "chain2": result["chain2"],
-        "chain3": {
-            "summary": result["chain3"].get("summary"),
-            "improvements": result["chain3"].get("improvements"),
-        },
-    }
+    return _report_response_from_row(stored_report)
 
 
 @app.get("/api/reports/scheduler")
@@ -253,6 +347,32 @@ def download_report_file(filename: str):
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="report file not found")
     return FileResponse(str(full_path), filename=safe_name, media_type="application/pdf")
+
+
+@app.get("/api/reports/session/{session_id}/pdf")
+def download_session_report_pdf(session_id: str):
+    sid = _safe_report_session_id(session_id)
+    if not service._db.enabled:
+        raise HTTPException(status_code=500, detail="Supabase is not configured")
+    try:
+        report = service._db.fetch_session_report(sid)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"stored report lookup failed: {exc}") from exc
+    if not report:
+        raise HTTPException(status_code=404, detail="session report not found")
+    pdf_path = str(report.get("pdf_path") or "").strip()
+    if not pdf_path:
+        raise HTTPException(status_code=404, detail="session report pdf not found")
+    try:
+        content = service._db.download_report_pdf(pdf_path)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    filename = str(report.get("pdf_filename") or Path(pdf_path).name or f"daily_report_{sid}.pdf")
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{Path(filename).name}"'},
+    )
 
 
 @app.post("/api/reports/scheduler/run")

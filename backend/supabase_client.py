@@ -26,6 +26,8 @@ class SupabaseClient:
         table: str,
         snapshot_bucket: str,
         snapshot_prefix: str,
+        report_table: str = "session_reports",
+        report_bucket: str = "collision-report-pdfs",
         retry_count: int = 3,
         retry_delay_sec: float = 0.4,
     ):
@@ -34,6 +36,8 @@ class SupabaseClient:
         self._table  = table
         self._snapshot_bucket = snapshot_bucket
         self._snapshot_prefix = snapshot_prefix.strip().strip("/") or "events"
+        self._report_table    = report_table.strip() or "session_reports"
+        self._report_bucket   = report_bucket.strip() or "collision-report-pdfs"
         self._retry_count     = max(1, min(10, retry_count))
         self._retry_delay_sec = max(0.0, min(5.0, retry_delay_sec))
         # 로컬 프록시 우회 (global HTTP_PROXY 무시)
@@ -46,6 +50,10 @@ class SupabaseClient:
     @property
     def snapshot_enabled(self) -> bool:
         return bool(self._snapshot_bucket)
+
+    @property
+    def report_bucket(self) -> str:
+        return self._report_bucket
 
     # ── 경로 유틸 ─────────────────────────────────────────────────────────────
 
@@ -202,6 +210,197 @@ class SupabaseClient:
             if offset > 200000:
                 break
         return rows
+
+    # Report history ------------------------------------------------------
+
+    def _report_object_path(self, session_id: str) -> str:
+        safe_session_id = self._safe_path_part(session_id)
+        return f"reports/{safe_session_id}/daily_report_{safe_session_id}.pdf"
+
+    def _fetch_table_rows(
+        self,
+        table: str,
+        query_params: dict[str, str],
+        timeout: int = 6,
+    ) -> list[dict[str, Any]]:
+        table_name = urllib.parse.quote(table, safe="")
+        params = urllib.parse.urlencode(query_params)
+        url = f"{self._url}/rest/v1/{table_name}?{params}"
+        request = urllib.request.Request(
+            url=url,
+            method="GET",
+            headers={
+                "apikey": self._key,
+                "Authorization": f"Bearer {self._key}",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with self._opener.open(request, timeout=timeout) as response:
+                payload = response.read().decode("utf-8")
+            rows = json.loads(payload) if payload else []
+            if not isinstance(rows, list):
+                raise RuntimeError("invalid payload type")
+            return [row for row in rows if isinstance(row, dict)]
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Supabase fetch failed: HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError) as exc:
+            raise RuntimeError(f"Supabase fetch failed: {exc}") from exc
+
+    def fetch_session_report(self, session_id: str) -> dict[str, Any] | None:
+        rows = self._fetch_table_rows(
+            self._report_table,
+            {
+                "select": "*",
+                "session_id": f"eq.{session_id}",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def fetch_session_reports(self, session_ids: list[str]) -> dict[str, dict[str, Any]]:
+        clean_ids = [sid for sid in dict.fromkeys(str(item).strip() for item in session_ids) if sid]
+        if not clean_ids:
+            return {}
+        quoted_ids = ",".join(f'"{sid}"' for sid in clean_ids)
+        rows = self._fetch_table_rows(
+            self._report_table,
+            {
+                "select": "*",
+                "session_id": f"in.({quoted_ids})",
+            },
+        )
+        return {
+            str(row.get("session_id")): row
+            for row in rows
+            if row.get("session_id") is not None
+        }
+
+    def insert_session_report(self, report: dict[str, Any]) -> dict[str, Any]:
+        table_name = urllib.parse.quote(self._report_table, safe="")
+        url = f"{self._url}/rest/v1/{table_name}"
+        payload = json.dumps(report, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            url=url,
+            data=payload,
+            method="POST",
+            headers={
+                "apikey": self._key,
+                "Authorization": f"Bearer {self._key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Prefer": "return=representation",
+            },
+        )
+        try:
+            with self._opener.open(request, timeout=8) as response:
+                payload_text = response.read().decode("utf-8")
+                status = int(getattr(response, "status", 0))
+                if status not in {200, 201}:
+                    raise RuntimeError(f"HTTP {status}")
+            rows = json.loads(payload_text) if payload_text else []
+            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+                return rows[0]
+            return report
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Supabase report insert failed: HTTP {exc.code}: {detail}") from exc
+
+    def upload_report_pdf(self, session_id: str, pdf_bytes: bytes) -> str:
+        object_path = self._report_object_path(session_id)
+        bucket_name = urllib.parse.quote(self._report_bucket, safe="")
+        object_path_encoded = urllib.parse.quote(object_path, safe="/")
+        url = f"{self._url}/storage/v1/object/{bucket_name}/{object_path_encoded}"
+        request = urllib.request.Request(
+            url=url,
+            data=pdf_bytes,
+            method="POST",
+            headers={
+                "apikey": self._key,
+                "Authorization": f"Bearer {self._key}",
+                "Content-Type": "application/pdf",
+                "x-upsert": "true",
+            },
+        )
+        with self._opener.open(request, timeout=12) as response:
+            status = int(getattr(response, "status", 0))
+            if status not in {200, 201}:
+                raise RuntimeError(f"HTTP {status}")
+        return object_path
+
+    def download_report_pdf(self, object_path: str) -> bytes:
+        clean_path = object_path.strip().strip("/")
+        if not clean_path:
+            raise ValueError("report object path is required")
+        bucket_name = urllib.parse.quote(self._report_bucket, safe="")
+        object_path_encoded = urllib.parse.quote(clean_path, safe="/")
+        url = f"{self._url}/storage/v1/object/{bucket_name}/{object_path_encoded}"
+        request = urllib.request.Request(
+            url=url,
+            method="GET",
+            headers={
+                "apikey": self._key,
+                "Authorization": f"Bearer {self._key}",
+            },
+        )
+        try:
+            with self._opener.open(request, timeout=12) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"report download failed: HTTP {exc.code}: {detail}") from exc
+
+    def delete_session_report(self, session_id: str) -> bool:
+        row = self.fetch_session_report(session_id)
+        table_name = urllib.parse.quote(self._report_table, safe="")
+        params = urllib.parse.urlencode({"session_id": f"eq.{session_id}"})
+        url = f"{self._url}/rest/v1/{table_name}?{params}"
+        request = urllib.request.Request(
+            url=url,
+            method="DELETE",
+            headers={
+                "apikey": self._key,
+                "Authorization": f"Bearer {self._key}",
+                "Prefer": "return=minimal",
+            },
+        )
+        with self._opener.open(request, timeout=8) as response:
+            status = int(getattr(response, "status", 0))
+            if status not in {200, 204}:
+                raise RuntimeError(f"HTTP {status}")
+        if row:
+            pdf_path = str(row.get("pdf_path") or "").strip()
+            if pdf_path:
+                self.delete_report_object(pdf_path)
+        return bool(row)
+
+    def delete_report_object(self, object_path: str) -> bool:
+        clean_path = object_path.strip().strip("/")
+        if not clean_path:
+            return False
+        bucket_name = urllib.parse.quote(self._report_bucket, safe="")
+        object_path_encoded = urllib.parse.quote(clean_path, safe="/")
+        url = f"{self._url}/storage/v1/object/{bucket_name}/{object_path_encoded}"
+        request = urllib.request.Request(
+            url=url,
+            method="DELETE",
+            headers={
+                "apikey": self._key,
+                "Authorization": f"Bearer {self._key}",
+            },
+        )
+        try:
+            with self._opener.open(request, timeout=8) as response:
+                status = int(getattr(response, "status", 0))
+                if status not in {200, 204}:
+                    raise RuntimeError(f"HTTP {status}")
+            return True
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return False
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"report object delete failed: HTTP {exc.code}: {detail}") from exc
 
     # ── 삭제 ──────────────────────────────────────────────────────────────────
 

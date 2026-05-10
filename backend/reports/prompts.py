@@ -126,9 +126,13 @@ Use a lightweight Tree of Thoughts method internally:
 
 Hard constraints:
 - Never change Chain 2 total_events, risk_distribution, or event facts.
+- The summary must include the risk scale, main repeated obstacles, and core action direction for managers.
+- Do not modify top_obstacles. Carry it into the final report material exactly as Chain 2 provided it.
+- Keep key_cases[].why_key as readable Korean judgement evidence for the PDF.
 - Use concise, official safety-management report style.
 - Use technical terms only when they help decisions.
 - Include risk_patterns in the final report material.
+- Include top_obstacles in the final report material.
 - All text fields (title, summary, risk_patterns, improvements, why_key) must be written in Korean.
 - Return JSON only.
 """
@@ -157,6 +161,7 @@ Return exactly this JSON schema (all text fields in Korean):
       "why_key": "간결한 공식 판정 이유 (한국어)"
     }}
   ],
+  "top_obstacles": [{{"name": "obstacle", "count": 0}}],
   "risk_patterns": ["최종 보고서용 위험 패턴 (한국어)"],
   "improvements": ["최종 조치 항목 (한국어)"]
 }}

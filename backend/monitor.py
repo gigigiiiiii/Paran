@@ -80,6 +80,8 @@ class MonitorService:
             table           = os.getenv("SUPABASE_EVENT_TABLE", "collision_events").strip() or "collision_events",
             snapshot_bucket = os.getenv("SUPABASE_SNAPSHOT_BUCKET", "collision-event-snaps").strip(),
             snapshot_prefix = snapshot_prefix,
+            report_table    = os.getenv("SUPABASE_REPORT_TABLE", "session_reports").strip() or "session_reports",
+            report_bucket   = os.getenv("SUPABASE_REPORT_BUCKET", "collision-report-pdfs").strip() or "collision-report-pdfs",
             retry_count     = retry_count,
             retry_delay_sec = retry_delay,
         )
@@ -498,6 +500,7 @@ class MonitorService:
         snapshot_paths: set[str] = set()
         deleted_events      = 0
         deleted_images      = 0
+        deleted_report      = False
         image_delete_errors: list[str] = []
         if self._db.enabled:
             try:
@@ -523,6 +526,10 @@ class MonitorService:
                         deleted_images += 1
                 except Exception as exc:
                     image_delete_errors.append(str(exc))
+            try:
+                deleted_report = self._db.delete_session_report(sid)
+            except Exception as exc:
+                image_delete_errors.append(f"report delete failed: {exc}")
 
         removed_from_memory = self._clear_session_from_memory(sid)
         payload = {
@@ -530,6 +537,7 @@ class MonitorService:
             "session_id":           sid,
             "deleted_events":       int(deleted_events),
             "deleted_images":       int(deleted_images),
+            "deleted_report":       bool(deleted_report),
             "removed_from_memory":  int(removed_from_memory),
         }
         if image_delete_errors:
@@ -553,6 +561,27 @@ class MonitorService:
             except ValueError:
                 return 0
         return 0
+
+    def _report_summary(self, report: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not report:
+            return None
+        return {
+            "session_id": report.get("session_id"),
+            "generated_at": report.get("generated_at"),
+            "report_date": report.get("report_date"),
+            "llm_provider": report.get("llm_provider"),
+            "summary": report.get("summary"),
+            "total_events": report.get("total_events"),
+            "risk_distribution": report.get("risk_distribution") or {},
+            "risk_patterns": report.get("risk_patterns") or [],
+            "improvements": report.get("improvements") or [],
+            "key_cases": report.get("key_cases") or [],
+            "top_obstacles": report.get("top_obstacles") or [],
+            "pdf_bucket": report.get("pdf_bucket"),
+            "pdf_path": report.get("pdf_path"),
+            "pdf_filename": report.get("pdf_filename"),
+            "download_url": f"/api/reports/session/{report.get('session_id')}/pdf",
+        }
 
     def sessions(self, limit=40, scan_limit=5000, exclude_session_id: str | None = None):
         try:
@@ -648,6 +677,23 @@ class MonitorService:
                 "start_ts_ms":    start_ts_ms,
                 "end_ts_ms":      end_ts_ms,
             })
+
+        if self._db.enabled and sessions:
+            report_error = None
+            try:
+                reports = self._db.fetch_session_reports([str(row["session_id"]) for row in sessions])
+                for session in sessions:
+                    session["report"] = self._report_summary(reports.get(str(session.get("session_id"))))
+            except Exception as exc:
+                report_error = str(exc)
+                for session in sessions:
+                    session["report"] = None
+            if report_error:
+                with self._lock:
+                    self._storage_error = f"Supabase report fetch failed: {report_error}"
+        else:
+            for session in sessions:
+                session["report"] = None
 
         sessions.sort(
             key=lambda row: (
