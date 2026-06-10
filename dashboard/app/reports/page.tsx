@@ -238,10 +238,6 @@ export default function ReportsPage() {
             <span className="material-symbols-outlined">analytics</span>
             <span>Analytics</span>
           </Link>
-          <Link href="/settings" className="navItem">
-            <span className="material-symbols-outlined">settings</span>
-            <span>Settings</span>
-          </Link>
           <Link href="/reports" className="navItem navItemActive">
             <span className="material-symbols-outlined">smart_toy</span>
             <span>AI Report</span>

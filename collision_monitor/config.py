@@ -54,6 +54,7 @@ def parse_args(argv=None):
     parser.add_argument("--fixed-classes", type=str, default="", help="Comma separated fixed obstacle class names")
     parser.add_argument("--detection-classes", type=str, default="", help="Comma separated class names to pass to YOLO inference")
     parser.add_argument("--all-non-person", action="store_true", help="Treat all non-person classes as obstacles.")
+    parser.add_argument("--person-as-obstacle", action="store_true", help="Also compare detected people against other people as collision obstacles.")
 
     parser.add_argument("--use-sahi", action="store_true", dest="use_sahi",
                         help="Use SAHI sliced inference for small object detection")

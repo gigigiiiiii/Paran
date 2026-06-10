@@ -226,7 +226,10 @@ class MonitorService:
             if live_model_env:
                 _m = Path(live_model_env)
                 args.model = str(_m if _m.is_absolute() else _project_root / _m)
+            person_as_obstacle = os.getenv("MONITOR_LIVE_PERSON_AS_OBSTACLE", "1").strip().lower()
+            args.person_as_obstacle = person_as_obstacle not in {"0", "false", "no", "off"}
         else:
+            args.person_as_obstacle = False
             test_model_env = os.getenv("MONITOR_TEST_MODEL", "").strip()
             if test_model_env:
                 _m = Path(test_model_env)
@@ -796,6 +799,9 @@ class MonitorService:
                 color = (50, 220, 50) if kind == "person" else (0, 165, 255)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 label = str(det.get("name") or kind or "object")
+                track_id = det.get("track_id")
+                if track_id is not None:
+                    label = f"{label} #{int(track_id)}"
                 cv2.putText(
                     frame,
                     label,
@@ -926,6 +932,7 @@ class MonitorService:
                 "sample_z_max_offset":       float(getattr(self._args, "sample_z_max_offset", 0.0) or 0.0),
                 "detection_classes":         str(getattr(self._args, "detection_classes", "") or ""),
                 "obstacle_classes":          str(getattr(self._args, "obstacle_classes", "") or ""),
+                "person_as_obstacle":        bool(getattr(self._args, "person_as_obstacle", False)),
                 "video_process_every_frame": bool(getattr(self._args, "video_process_every_frame", False)),
                 "video_depth_sync":          bool(getattr(self._args, "video_depth_sync", False)),
                 "track_count":               int(latest.get("track_count") or 0),

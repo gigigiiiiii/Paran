@@ -20,6 +20,14 @@ _PAIR_COLORS = {
 }
 
 
+def _detection_label(item: dict, fallback_name: str) -> str:
+    name = str(item.get("name") or fallback_name or "object")
+    track_id = item.get("track_id")
+    if track_id is None:
+        return name
+    return f"{name} #{int(track_id)}"
+
+
 def draw_detections(
     canvas: np.ndarray,
     people: list[dict],
@@ -32,7 +40,7 @@ def draw_detections(
     """사람·장애물 bbox + 모든 위험 쌍 연결선을 canvas에 그린다."""
     for p in people:
         x1, y1, x2, y2 = p["bbox"]
-        label = "person"
+        label = _detection_label(p, "person")
         box_color = CLASS_COLORS.get("person", (50, 220, 50))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
         cv2.putText(canvas, label,
@@ -42,7 +50,7 @@ def draw_detections(
     for o in obstacles:
         x1, y1, x2, y2 = o["bbox"]
         det_bbox = o.get("det_bbox")
-        label = f"{o['name']}"
+        label = _detection_label(o, o.get("name", "object"))
         box_color = CLASS_COLORS.get(o["name"], (220, 120, 60))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
         cv2.putText(canvas, label,

@@ -102,6 +102,7 @@ class FrameProcessor:
                 {x.strip() for x in args.obstacle_classes.split(",") if x.strip()}
                 if args.obstacle_classes else OBSTACLE_CLASSES_DEFAULT
             )
+        self.person_as_obstacle = bool(getattr(args, "person_as_obstacle", False))
         self.fixed_classes: set[str] = (
             {x.strip() for x in args.fixed_classes.split(",") if x.strip()}
             if args.fixed_classes else FIXED_CLASSES_DEFAULT
@@ -467,7 +468,7 @@ class FrameProcessor:
         people    : list[dict] = []
         obstacles : list[dict] = []
 
-        for box in raw_boxes:
+        for detection_idx, box in enumerate(raw_boxes):
             cls_id = int(box.cls[0].item())
             conf   = float(box.conf[0].item())
             name   = (self.class_names.get(cls_id, str(cls_id))
@@ -548,8 +549,8 @@ class FrameProcessor:
                 point_3d = pixel_to_3d(u, v, z, intrinsics)
 
                 is_person   = (name in PERSON_CLASS_ALIASES)
-                is_obstacle = args.all_non_person or (name in self.obstacle_classes)
-                if is_obstacle:
+                is_obstacle = args.all_non_person or (name in self.obstacle_classes) or (self.person_as_obstacle and is_person)
+                if is_obstacle and not is_person:
                     if area_ratio < args.min_obstacle_area_ratio:
                         continue
                     if max_size_m < args.min_obstacle_size_m:
@@ -581,9 +582,9 @@ class FrameProcessor:
                 # depth 없음: 픽셀 좌표를 point_3d 대신 사용 (assign_tracks 호환)
                 point_3d = np.array([float(u), float(v), 0.0], dtype=np.float32)
                 is_person   = (name in PERSON_CLASS_ALIASES)
-                is_obstacle = args.all_non_person or (name in self.obstacle_classes)
+                is_obstacle = args.all_non_person or (name in self.obstacle_classes) or (self.person_as_obstacle and is_person)
                 # depth 없을 때도 면적 비율로 너무 작은 장애물 제거
-                if is_obstacle and area_ratio < args.min_obstacle_area_ratio:
+                if is_obstacle and not is_person and area_ratio < args.min_obstacle_area_ratio:
                     continue
 
             if box.id is not None:
@@ -618,6 +619,7 @@ class FrameProcessor:
                 "point_3d"         : point_3d,
                 "rep_uv"           : (u, v),
                 "track_id"         : track_id,
+                "source_detection_id": detection_idx,
                 "is_fixed"         : name in self.fixed_classes,
                 "velocity"         : None,
                 "velocity_confidence": 0.0,
@@ -626,8 +628,8 @@ class FrameProcessor:
 
             if is_person:
                 people.append(item)
-            elif is_obstacle:
-                obstacles.append(item)
+            if is_obstacle:
+                obstacles.append(dict(item))
 
         # ── assign_tracks ────────────────────────────────────────────────────
         curr_person_points, self.next_person_track_id = assign_tracks(
@@ -699,6 +701,11 @@ class FrameProcessor:
                 for obs in obstacles:
                     p_tid = int(person.get("track_id", -1))
                     o_tid = int(obs.get("track_id", -1))
+                    if (
+                        obs.get("name") == PERSON_CLASS_NAME
+                        and person.get("source_detection_id") == obs.get("source_detection_id")
+                    ):
+                        continue
                     pair_key = (p_tid, o_tid)
                     lock_remaining = self.lock_pairs.get(pair_key, 0)
 
